@@ -1,4 +1,5 @@
 use colored::Colorize;
+use inkwell::types::BasicMetadataTypeEnum;
 use std::fmt::{Debug, Display, Error};
 
 use crate::formatter::{Format, Formatter};
@@ -34,7 +35,7 @@ impl<'input> Comment<'input> {
 #[derive(Debug)]
 pub struct Function<'input> {
     pub definition: FunctionDefinition<'input>,
-    pub body: Box<Expression<'input>>,
+    pub body: Option<Box<Expression<'input>>>,
 }
 
 #[derive(Debug)]
@@ -70,6 +71,7 @@ pub enum Statement<'input> {
 #[derive(Debug)]
 pub struct Let<'input> {
     pub name: &'input str,
+    pub tipe: Type<'input>,
     pub value: Box<Expression<'input>>,
 }
 
@@ -94,7 +96,7 @@ pub struct FunctionCall<'input> {
 #[derive(Debug)]
 pub enum Expression<'input> {
     Expression(Box<Expression<'input>>),
-    Block(Vec<Statement<'input>>),
+    Block(Block<'input>),
     FunctionCall(FunctionCall<'input>),
     Variable(Variable<'input>),
     Number(i32),
@@ -103,6 +105,12 @@ pub enum Expression<'input> {
     Op(Box<Expression<'input>>, Opcode, Box<Expression<'input>>),
     ExpressionComment((Box<Expression<'input>>, Comment<'input>)),
     Error,
+}
+
+#[derive(Debug)]
+pub struct Block<'input> {
+    pub statements: Vec<Statement<'input>>,
+    pub return_value: Option<Box<Expression<'input>>>,
 }
 
 #[derive(Debug)]
@@ -135,7 +143,7 @@ pub struct If<'input> {
 }
 
 // types ----------------------------------------------------------------------
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum Type<'input> {
     I32,
     Custom(&'input str),

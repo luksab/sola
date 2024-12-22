@@ -45,7 +45,7 @@ pub Comment: Comment<'input> = {
 Function: Function<'input> = {
     <definition: FunctionDefinition> <body:Expression> => Function {
         definition: definition,
-        body: body,
+        body: Some(body),
     },
 };
 
@@ -75,19 +75,19 @@ Type: Type<'input> = {
 
 // Expression grammar
 Statement: Statement<'input> = {
-    "let " <name:r"[a-zA-Z\{Emoji}][\w\{Emoji}]*"> "=" <e:Expression> ";" => 
-        Statement::Let(Let{name, value: e}),
+    "let " <name:r"[a-zA-Z\{Emoji}][\w\{Emoji}]*">":" <t:Type> "=" <e:Expression> ";" => 
+        Statement::Let(Let{name, tipe: t, value: e}),
     "return" <e:Expression> ";" => Statement::Return(e),
-    "if" <e:Expression> "{" <s:(Statement)*> "}" => {
-        Statement::Expression(Box::new(Expression::If(If {
-            condition: e, body: Box::new(Expression::Block(s)), else_body: None
-            })))
-    },
-    "if" <e:Expression> "{" <s:(Statement)*> "}" "else" "{" <se:(Statement)*> "}" => {
-        Statement::Expression(Box::new(Expression::If(If {
-            condition: e, body: Box::new(Expression::Block(s)), else_body: Some(Box::new(Expression::Block(se)))
-        })))
-    },
+    // "if" <e:Expression> "{" <b:Block> "}" => {
+    //     Statement::Expression(Box::new(Expression::If(If {
+    //         condition: e, body: Box::new(Expression::Block(b)), else_body: None
+    //         })))
+    // },
+    // "if" <e:Expression> "{" <b:Block> "}" "else" "{" <be:Block> "}" => {
+    //     Statement::Expression(Box::new(Expression::If(If {
+    //         condition: e, body: Box::new(Expression::Block(b)), else_body: Some(Box::new(Expression::Block(be)))
+    //     })))
+    // },
     <e:Expression> ";" => Statement::Expression(e),
     Comment => Statement::Comment(<>),
     ! => { errors.push(<>); Statement::Error },
@@ -97,16 +97,16 @@ Expr: Box<Expression<'input>> = {
     Num => Box::new(Expression::Number(<>)),
     <s:r#""[^"]*""#> => Box::new(Expression::String(ASTString{value: <>})),
     "(" <Expression> ")",
-    "{" <s:(Statement)*> "}" => Box::new(Expression::Block(s)),
-    // "{" <s:(Statement)*> <e:Expression> "}" => Box::new(Expression::Block(s)),
-    "if" <e:Expression> "{" <s:(Statement)*> "}" => {
+    // "{" <s:(Statement)*> "}" => Box::new(Expression::Block(s)),
+    // "{" <b:Block> "}" => Box::new(Expression::Block(b)),
+    "if" <e:Expression> <b:Block> => {
         Box::new(Expression::If(If {
-            condition: e, body: Box::new(Expression::Block(s)), else_body: None
+            condition: e, body: Box::new(Expression::Block(b)), else_body: None
             }))
     },
-    "if" <e:Expression> "{" <s:(Statement)*> "}" "else" "{" <se:(Statement)*> "}" => {
+    "if" <e:Expression> <b:Block> "else" <be:Block> => {
         Box::new(Expression::If(If {
-            condition: e, body: Box::new(Expression::Block(s)), else_body: Some(Box::new(Expression::Block(se)))
+            condition: e, body: Box::new(Expression::Block(b)), else_body: Some(Box::new(Expression::Block(be)))
         }))
     },
     <FunctionCall> => Box::new(Expression::FunctionCall(<>)),
@@ -114,7 +114,22 @@ Expr: Box<Expression<'input>> = {
         Box::new(Expression::Variable(Variable{name: <>}))
     },
     // <expr: Expression> <comment: Comment> => Box::new(Expression::ExpressionComment(<expr>, <comment>)),
-    ! => { errors.push(<>); Box::new(Expression::Error) },
+    // ! => { errors.push(<>); Box::new(Expression::Error) },
+};
+
+Block: Block<'input> = {
+    "{" <s:(Statement)*> "}" => Block {
+        statements: s,
+        return_value: None,
+    },
+    "{" <s:(Statement)*> <e:Expression> "}" => Block {
+        statements: s,
+        return_value: Some(e),
+    }
+};
+
+BlockExpr: Box<Expression<'input>> = {
+    <b:Block> => Box::new(Expression::Block(b)),
 };
 
 FunctionCall: FunctionCall<'input> = {
@@ -127,7 +142,11 @@ FunctionCall: FunctionCall<'input> = {
 
 // --------------- math -------------------------------------------------------
 
-Expression = Tier<ExprOp, Factor>;
+Expression: Box<Expression<'input>> = {
+    <b:Block> => Box::new(Expression::Block(b)),
+    <e:Express> => e,
+};
+Express = Tier<ExprOp, Factor>;
 Factor = Tier<FactorOp, Comparison>;
 Comparison = Tier<ComparisonOp, Expr>;
 

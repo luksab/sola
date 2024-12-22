@@ -1,5 +1,7 @@
 pub mod base_ast;
 pub mod formatter;
+pub mod compile;
+pub mod compiler;
 
 use colored::*;
 use lalrpop_util::{lexer::Token, ErrorRecovery, ParseError};
@@ -177,4 +179,6 @@ fn main() {
     } else {
         print!("{}", formatter::format(&program));
     }
+
+    compile::compile(&program);
 }

@@ -86,7 +86,7 @@ impl Format for Comment<'_> {
 impl Format for Function<'_> {
     fn format(&self, fmt: &mut Formatter) {
         self.definition.format(fmt);
-        self.body.format(fmt);
+        self.body.as_ref().map(|body| body.format(fmt));
         fmt.push_str("\n\n");
     }
 }
@@ -155,8 +155,13 @@ impl Format for Expression<'_> {
             Expression::Block(block) => {
                 fmt.push_str("{\n");
                 fmt.indent();
-                for stmt in block {
+                for stmt in block.statements.iter() {
                     stmt.format(fmt);
+                }
+                if let Some(return_value) = &block.return_value {
+                    fmt.push_str_indented("");
+                    return_value.format(fmt);
+                    fmt.push_str("\n");
                 }
                 fmt.unindent();
                 fmt.push_str_indented("}");
