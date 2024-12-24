@@ -485,7 +485,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                             ))),
                             Assign => {
                                 // handle assignment
-                                let solar_var = match *left.borrow() {
+                                let sola_var = match *left.borrow() {
                                     Expression::Variable(ref var_name) => var_name,
                                     _ => {
                                         return Err("Expected variable as left-hand operator of assignment.".to_string());
@@ -495,7 +495,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                                 let var_val = self.compile_expr(right)?;
                                 let var = self
                                     .variables
-                                    .get(solar_var.name)
+                                    .get(sola_var.name)
                                     .ok_or("Undefined variable.")?;
 
                                 self.builder
