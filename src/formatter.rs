@@ -150,7 +150,6 @@ impl Format for FunctionCall<'_> {
 impl Format for Expression<'_> {
     fn format(&self, fmt: &mut Formatter) {
         match self {
-            Expression::Expression(expr) => expr.format(fmt),
             Expression::FunctionCall(func) => func.format(fmt),
             Expression::Block(block) => {
                 fmt.push_str("{\n");
@@ -183,6 +182,7 @@ impl Format for Expression<'_> {
                 expr.format(fmt);
                 comment.format(fmt);
             }
+            Expression::While(while_) => while_.format(fmt),
             Expression::Error => fmt.push_string("error".red().to_string()),
         }
     }
@@ -198,5 +198,14 @@ impl Format for If<'_> {
             fmt.push_str(" else ");
             else_.format(fmt);
         }
+    }
+}
+
+impl Format for While<'_> {
+    fn format(&self, fmt: &mut Formatter) {
+        fmt.push_str("while ");
+        self.condition.format(fmt);
+        fmt.push_str(" ");
+        self.body.format(fmt);
     }
 }

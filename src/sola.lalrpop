@@ -40,6 +40,10 @@ pub Comment: Comment<'input> = {
     r"//[^\n\r]*" => Comment::new(<>),
 };
 
+Identifier: &'input str = {
+    r"[a-zA-Z\{Emoji}][\w\{Emoji}]*"
+};
+
 // Function grammar
 
 Function: Function<'input> = {
@@ -50,12 +54,12 @@ Function: Function<'input> = {
 };
 
 FunctionDefinition: FunctionDefinition<'input> = {
-    "fn " <name:r"[a-zA-Z\{Emoji}][\w\{Emoji}]*"> "(" <params:(Parameter)*> ")" "->" <return_type: Type> => FunctionDefinition {
+    "fn " <name:Identifier> "(" <params:(Parameter)*> ")" "->" <return_type: Type> => FunctionDefinition {
         name: name,
         params: params,
         return_type: Some(return_type),
     },
-    "fn " <name:r"[a-zA-Z\{Emoji}][\w\{Emoji}]*"> "(" <params:(Parameter)*> ")" => FunctionDefinition {
+    "fn " <name:Identifier> "(" <params:(Parameter)*> ")" => FunctionDefinition {
         name: name,
         params: params,
         return_type: None,
@@ -63,7 +67,7 @@ FunctionDefinition: FunctionDefinition<'input> = {
 };
 
 Parameter: Parameter<'input> = {
-    <name:r"[a-zA-Z\{Emoji}][\w\{Emoji}]*">":" <tipe: Type> => Parameter {
+    <name:Identifier>":" <tipe: Type> => Parameter {
         name: name,
         tipe: tipe,
     }
@@ -71,11 +75,12 @@ Parameter: Parameter<'input> = {
 
 Type: Type<'input> = {
     "i32" => Type::I32,
+    "bool" => Type::Bool,
 };
 
 // Expression grammar
 Statement: Statement<'input> = {
-    "let " <name:r"[a-zA-Z\{Emoji}][\w\{Emoji}]*">":" <t:Type> "=" <e:Expression> ";" => 
+    "let " <name:Identifier>":" <t:Type> "=" <e:Expression> ";" => 
         Statement::Let(Let{name, tipe: t, value: e}),
     "return" <e:Expression> ";" => Statement::Return(e),
     // "if" <e:Expression> "{" <b:Block> "}" => {
@@ -104,8 +109,13 @@ Expr: Box<Expression<'input>> = {
             condition: e, body: Box::new(Expression::Block(b)), else_body: Some(Box::new(Expression::Block(be)))
         }))
     },
+    "while" <e:Expression> <b:Block> => {
+        Box::new(Expression::While(While {
+            condition: e, body: Box::new(Expression::Block(b))
+        }))
+    },
     <FunctionCall> => Box::new(Expression::FunctionCall(<>)),
-    r"[a-zA-Z\{Emoji}][\w\{Emoji}]*" => {
+    Identifier => {
         Box::new(Expression::Variable(Variable{name: <>}))
     },
     // <expr: Expression> <comment: Comment> => Box::new(Expression::ExpressionComment(<expr>, <comment>)),
@@ -128,7 +138,7 @@ BlockExpr: Box<Expression<'input>> = {
 };
 
 FunctionCall: FunctionCall<'input> = {
-    <name:r"[a-zA-Z\{Emoji}][\w\{Emoji}]*"> "(" <args:Comma<Expression>> ")" => FunctionCall {
+    <name:Identifier> "(" <args:Comma<Expression>> ")" => FunctionCall {
         name: name,
         args: args,
     }
@@ -139,11 +149,26 @@ FunctionCall: FunctionCall<'input> = {
 
 Expression: Box<Expression<'input>> = {
     <b:Block> => Box::new(Expression::Block(b)),
-    <e:Express> => e,
+    <e:Assignment> => e,
 };
+
+Assignment = Tier<AssignmentOp, Comparison>;
+Comparison = Tier<ComparisonOp, Express>;
 Express = Tier<ExprOp, Factor>;
-Factor = Tier<FactorOp, Comparison>;
-Comparison = Tier<ComparisonOp, Expr>;
+Factor = Tier<FactorOp, Expr>;
+
+AssignmentOp: Opcode = {
+    "=" => Opcode::Assign,
+};
+
+ComparisonOp: Opcode = {
+    "==" => Opcode::Eq,
+    "!=" => Opcode::Ne,
+    "<" => Opcode::Lt,
+    "<=" => Opcode::Le,
+    ">" => Opcode::Gt,
+    ">=" => Opcode::Ge,
+};
 
 ExprOp: Opcode = {
     "+" => Opcode::Add,
@@ -155,14 +180,6 @@ FactorOp: Opcode = {
     "/" => Opcode::Div,
 };
 
-ComparisonOp: Opcode = {
-    "==" => Opcode::Eq,
-    "!=" => Opcode::Ne,
-    "<" => Opcode::Lt,
-    "<=" => Opcode::Le,
-    ">" => Opcode::Gt,
-    ">=" => Opcode::Ge,
-};
 
 Num: i32 = {
     r"[0-9]+" => i32::from_str(<>).unwrap()

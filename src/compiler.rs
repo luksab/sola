@@ -1,11 +1,11 @@
-use std::collections::HashMap;
+use std::{borrow::Borrow, collections::HashMap};
 
 use inkwell::{
     builder::Builder,
     context::Context,
     module::Module,
     types::BasicMetadataTypeEnum,
-    values::{AnyValue, BasicMetadataValueEnum, BasicValueEnum, FunctionValue, PointerValue},
+    values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, PointerValue},
 };
 
 use crate::base_ast::{Expression, Function, FunctionDefinition, Program, Type};
@@ -183,6 +183,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 
         let fn_type = match proto.return_type {
             Some(Type::I32) => self.context.i32_type().fn_type(args_types, false),
+            Some(Type::Bool) => self.context.bool_type().fn_type(args_types, false),
             None => self.context.void_type().fn_type(args_types, false),
             Some(_) => todo!(),
         };
@@ -219,7 +220,6 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         expression: &Expression<'ctx>,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         match expression {
-            Expression::Expression(expression) => self.compile_expr(expression),
             Expression::Block(block) => {
                 for (i, statement) in block.statements.iter().enumerate() {
                     match statement {
@@ -319,7 +319,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                             inkwell::FloatPredicate::ONE,
                             float_value,
                             self.context.f64_type().const_float(0.0),
-                            "ifcond",
+                            "if.cond",
                         )
                         .unwrap(),
 
@@ -329,7 +329,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                             inkwell::IntPredicate::NE,
                             int_value,
                             self.context.bool_type().const_int(0, false),
-                            "ifcond",
+                            "if.cond",
                         )
                         .unwrap(),
                     Some(_) => todo!(),
@@ -337,9 +337,9 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 };
 
                 // build branch
-                let then_bb = self.context.append_basic_block(parent, "then");
-                let else_bb = self.context.append_basic_block(parent, "else");
-                let cont_bb = self.context.append_basic_block(parent, "ifcont");
+                let then_bb = self.context.append_basic_block(parent, "if.then");
+                let else_bb = self.context.append_basic_block(parent, "if.else");
+                let cont_bb = self.context.append_basic_block(parent, "if.cont");
 
                 self.builder
                     .build_conditional_branch(cond, then_bb, else_bb)
@@ -376,6 +376,56 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 phi.add_incoming(&[(&then_val, then_bb), (&else_val, else_bb)]);
 
                 Ok(Some(phi.as_basic_value()))
+            }
+            Expression::While(while_) => {
+                let parent = self.fn_value();
+
+                let cond_bb = self.context.append_basic_block(parent, "while.cond");
+                let body_bb = self.context.append_basic_block(parent, "while.body");
+                let cont_bb = self.context.append_basic_block(parent, "while.cont");
+
+                self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+                // build condition block
+                self.builder.position_at_end(cond_bb);
+                let cond = self.compile_expr(&while_.condition)?;
+                let cond = match cond {
+                    Some(BasicValueEnum::FloatValue(float_value)) => self
+                        .builder
+                        .build_float_compare(
+                            inkwell::FloatPredicate::ONE,
+                            float_value,
+                            self.context.f64_type().const_float(0.0),
+                            "while.cond",
+                        )
+                        .unwrap(),
+
+                    Some(BasicValueEnum::IntValue(int_value)) => self
+                        .builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::NE,
+                            int_value,
+                            self.context.bool_type().const_int(0, false),
+                            "while.cond",
+                        )
+                        .unwrap(),
+                    Some(_) => todo!(),
+                    None => todo!(),
+                };
+
+                self.builder
+                    .build_conditional_branch(cond, body_bb, cont_bb)
+                    .unwrap();
+
+                // build body block
+                self.builder.position_at_end(body_bb);
+                let _ = self.compile_expr(&while_.body)?;
+                self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+                // emit merge block
+                self.builder.position_at_end(cont_bb);
+
+                Ok(None)
             }
             Expression::Op(left, opcode, right) => {
                 let lhs = self
@@ -433,6 +483,31 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                                     )
                                     .unwrap(),
                             ))),
+                            Assign => {
+                                // handle assignment
+                                let solar_var = match *left.borrow() {
+                                    Expression::Variable(ref var_name) => var_name,
+                                    _ => {
+                                        return Err("Expected variable as left-hand operator of assignment.".to_string());
+                                    }
+                                };
+
+                                let var_val = self.compile_expr(right)?;
+                                let var = self
+                                    .variables
+                                    .get(solar_var.name)
+                                    .ok_or("Undefined variable.")?;
+
+                                self.builder
+                                    .build_store(
+                                        var.0,
+                                        var_val
+                                            .expect("Assignment expression must return a value."),
+                                    )
+                                    .unwrap();
+
+                                Ok(var_val)
+                            }
                             _ => todo!(),
                             // custom => {
                             //     let mut name = String::from("binary");

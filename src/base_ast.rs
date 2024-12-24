@@ -1,5 +1,4 @@
 use colored::Colorize;
-use inkwell::types::BasicMetadataTypeEnum;
 use std::fmt::{Debug, Display, Error};
 
 use crate::formatter::{Format, Formatter};
@@ -91,12 +90,18 @@ pub struct FunctionCall<'input> {
     pub args: Vec<Box<Expression<'input>>>,
 }
 
+#[derive(Debug)]
+pub struct While<'input> {
+    pub condition: Box<Expression<'input>>,
+    pub body: Box<Expression<'input>>,
+}
+
 // expressions ----------------------------------------------------------------
 
 #[derive(Debug)]
 pub enum Expression<'input> {
-    Expression(Box<Expression<'input>>),
     Block(Block<'input>),
+    While(While<'input>),
     FunctionCall(FunctionCall<'input>),
     Variable(Variable<'input>),
     Number(i32),
@@ -146,6 +151,7 @@ pub struct If<'input> {
 #[derive(Debug, Clone, Copy)]
 pub enum Type<'input> {
     I32,
+    Bool,
     Custom(&'input str),
 }
 
@@ -154,6 +160,7 @@ impl Display for Type<'_> {
         use self::Type::*;
         match *self {
             I32 => write!(fmt, "i32"),
+            Bool => write!(fmt, "bool"),
             Custom(name) => write!(fmt, "{}", name),
         }
     }
@@ -169,6 +176,7 @@ pub enum ExprSymbol<'input> {
 
 #[derive(Copy, Clone)]
 pub enum Opcode {
+    Assign,
     Mul,
     Div,
     Add,
@@ -196,6 +204,7 @@ impl Debug for Opcode {
     fn fmt(&self, fmt: &mut std::fmt::Formatter) -> Result<(), Error> {
         use self::Opcode::*;
         match *self {
+            Assign => write!(fmt, "="),
             Mul => write!(fmt, "*"),
             Div => write!(fmt, "/"),
             Add => write!(fmt, "+"),
@@ -214,6 +223,7 @@ impl Display for Opcode {
     fn fmt(&self, fmt: &mut std::fmt::Formatter) -> Result<(), Error> {
         use self::Opcode::*;
         match *self {
+            Assign => write!(fmt, "="),
             Mul => write!(fmt, "*"),
             Div => write!(fmt, "/"),
             Add => write!(fmt, "+"),
