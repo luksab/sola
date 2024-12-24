@@ -5,7 +5,7 @@ use inkwell::{
     context::Context,
     module::Module,
     types::BasicMetadataTypeEnum,
-    values::{BasicValueEnum, FunctionValue, PointerValue},
+    values::{AnyValue, BasicMetadataValueEnum, BasicValueEnum, FunctionValue, PointerValue},
 };
 
 use crate::base_ast::{Expression, Function, FunctionDefinition, Program, Type};
@@ -71,6 +71,21 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         module: &'a Module<'ctx>,
         program: &'a Program<'ctx>,
     ) -> Result<(), String> {
+        // let context = Context::create();
+        // let module = context.create_module("ret");
+        // let builder = context.create_builder();
+        // let i32_type = context.i32_type();
+        // let arg_types = [i32_type.into()];
+        // let fn_type = i32_type.fn_type(&arg_types, false);
+        // let fn_value = module.add_function("ret", fn_type, None);
+        // let entry = context.append_basic_block(fn_value, "entry");
+        // let i32_arg = fn_value.get_first_param().unwrap();
+
+        // builder.position_at_end(entry);
+        // builder.build_return(Some(&i32_arg)).unwrap();
+
+        // println!("{}", module.print_to_string().to_string());
+        // return Err("Not implemented".to_string())
         let mut compiler = Compiler {
             context,
             builder,
@@ -126,7 +141,6 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
             self.variables.insert(arg_name.to_string(), (alloca, tipe));
         }
 
-        println!("Compiling body of function: {}", function.definition.name);
         // compile body
         let body = self.compile_expr(function.body.as_ref().unwrap())?;
 
@@ -138,8 +152,6 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 )
             }
         };
-
-        println!("Function body compiled: {}", body);
 
         self.builder.build_return(Some(&body)).unwrap();
 
@@ -209,10 +221,6 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         match expression {
             Expression::Expression(expression) => self.compile_expr(expression),
             Expression::Block(block) => {
-                // let parent = self.fn_value();
-                // let block_bb = self.context.append_basic_block(parent, "block");
-                // self.builder.position_at_end(block_bb);
-
                 for (i, statement) in block.statements.iter().enumerate() {
                     match statement {
                         crate::base_ast::Statement::Let(let_) => {
@@ -253,7 +261,36 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     Ok(None)
                 }
             }
-            Expression::FunctionCall(function_call) => todo!(),
+            Expression::FunctionCall(function_call) => {
+                match self.get_function(function_call.name) {
+                    Some(fun) => {
+                        let args = &function_call.args;
+                        let mut compiled_args = Vec::with_capacity(args.len());
+
+                        for arg in args {
+                            compiled_args.push(self.compile_expr(arg)?);
+                        }
+
+                        let argsv: Vec<BasicMetadataValueEnum> = compiled_args
+                            .iter()
+                            .by_ref()
+                            .map(|&val| val.expect("Function argument must not be none").into())
+                            .collect();
+
+                        match self
+                            .builder
+                            .build_call(fun, argsv.as_slice(), "tmp")
+                            .unwrap()
+                            .try_as_basic_value()
+                            .left()
+                        {
+                            Some(value) => Ok(Some(value)),
+                            None => Err("Invalid call produced.".to_string()),
+                        }
+                    }
+                    None => Err("Unknown function.".to_string()),
+                }
+            }
             Expression::Variable(variable) => match self.variables.get(variable.name) {
                 Some(var) => Ok(Some(self.build_load(var.0, variable.name, var.1))),
                 None => Err("Could not find a matching variable.".to_string()),
@@ -262,8 +299,168 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 self.context.i32_type().const_int(*number as u64, false),
             ))),
             Expression::String(aststring) => todo!(),
-            Expression::If(_) => todo!(),
-            Expression::Op(expression, opcode, expression1) => todo!(),
+            Expression::If(if_expr) => {
+                let (condition, body, else_body) = (
+                    &if_expr.condition,
+                    &if_expr.body,
+                    if_expr
+                        .else_body
+                        .as_ref()
+                        .expect("If expression must have an else body"),
+                );
+                let parent = self.fn_value();
+
+                // create condition by comparing without 0.0 and returning an int
+                let cond = self.compile_expr(condition)?;
+                let cond = match cond {
+                    Some(BasicValueEnum::FloatValue(float_value)) => self
+                        .builder
+                        .build_float_compare(
+                            inkwell::FloatPredicate::ONE,
+                            float_value,
+                            self.context.f64_type().const_float(0.0),
+                            "ifcond",
+                        )
+                        .unwrap(),
+
+                    Some(BasicValueEnum::IntValue(int_value)) => self
+                        .builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::NE,
+                            int_value,
+                            self.context.bool_type().const_int(0, false),
+                            "ifcond",
+                        )
+                        .unwrap(),
+                    Some(_) => todo!(),
+                    None => todo!(),
+                };
+
+                // build branch
+                let then_bb = self.context.append_basic_block(parent, "then");
+                let else_bb = self.context.append_basic_block(parent, "else");
+                let cont_bb = self.context.append_basic_block(parent, "ifcont");
+
+                self.builder
+                    .build_conditional_branch(cond, then_bb, else_bb)
+                    .unwrap();
+
+                // build then block
+                self.builder.position_at_end(then_bb);
+                let then_val = self
+                    .compile_expr(body)?
+                    .expect("If body must return a value");
+                self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+                let then_bb = self.builder.get_insert_block().unwrap();
+
+                // build else block
+                self.builder.position_at_end(else_bb);
+                let else_val = self
+                    .compile_expr(else_body)?
+                    .expect("Else body must return a value");
+                self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+                let else_bb = self.builder.get_insert_block().unwrap();
+
+                // emit merge block
+                self.builder.position_at_end(cont_bb);
+
+                let phi_type = match then_val {
+                    BasicValueEnum::IntValue(_) => self.context.i32_type(),
+                    _ => todo!(),
+                };
+
+                let phi = self.builder.build_phi(phi_type, "iftmp").unwrap();
+
+                phi.add_incoming(&[(&then_val, then_bb), (&else_val, else_bb)]);
+
+                Ok(Some(phi.as_basic_value()))
+            }
+            Expression::Op(left, opcode, right) => {
+                let lhs = self
+                    .compile_expr(left)?
+                    .expect("Left side of binary operation must return a value.");
+                let rhs = self
+                    .compile_expr(right)?
+                    .expect("Right side of binary operation must return a value.");
+
+                use crate::base_ast::Opcode::*;
+                match (lhs, rhs) {
+                    (BasicValueEnum::IntValue(lhs), BasicValueEnum::IntValue(rhs)) => {
+                        match opcode {
+                            Add => Ok(Some(BasicValueEnum::IntValue(
+                                self.builder.build_int_add(lhs, rhs, "tmpadd").unwrap(),
+                            ))),
+                            Sub => Ok(Some(BasicValueEnum::IntValue(
+                                self.builder.build_int_sub(lhs, rhs, "tmpsub").unwrap(),
+                            ))),
+                            Mul => Ok(Some(BasicValueEnum::IntValue(
+                                self.builder.build_int_mul(lhs, rhs, "tmpmul").unwrap(),
+                            ))),
+                            Div => Ok(Some(BasicValueEnum::IntValue(
+                                self.builder
+                                    .build_int_signed_div(lhs, rhs, "tmpdiv")
+                                    .unwrap(),
+                            ))),
+                            Lt => Ok(Some(BasicValueEnum::IntValue(
+                                self.builder
+                                    .build_int_compare(
+                                        inkwell::IntPredicate::SLT,
+                                        lhs,
+                                        rhs,
+                                        "tmpcmp",
+                                    )
+                                    .unwrap(),
+                            ))),
+                            Gt => Ok(Some(BasicValueEnum::IntValue(
+                                self.builder
+                                    .build_int_compare(
+                                        inkwell::IntPredicate::SGT,
+                                        lhs,
+                                        rhs,
+                                        "tmpcmp",
+                                    )
+                                    .unwrap(),
+                            ))),
+                            Eq => Ok(Some(BasicValueEnum::IntValue(
+                                self.builder
+                                    .build_int_compare(
+                                        inkwell::IntPredicate::EQ,
+                                        lhs,
+                                        rhs,
+                                        "tmpcmp",
+                                    )
+                                    .unwrap(),
+                            ))),
+                            _ => todo!(),
+                            // custom => {
+                            //     let mut name = String::from("binary");
+
+                            //     name.push(custom);
+
+                            //     match self.get_function(name.as_str()) {
+                            //         Some(fun) => {
+                            //             match self
+                            //                 .builder
+                            //                 .build_call(fun, &[lhs.into(), rhs.into()], "tmpbin")
+                            //                 .unwrap()
+                            //                 .try_as_basic_value()
+                            //                 .left()
+                            //             {
+                            //                 Some(value) => Ok(value.into_float_value()),
+                            //                 None => Err("Invalid call produced."),
+                            //             }
+                            //         }
+
+                            //         None => Err("Undefined binary operator."),
+                            //     }
+                            // }
+                        }
+                    }
+                    _ => todo!(),
+                }
+            }
             Expression::ExpressionComment(_) => todo!(),
             Expression::Error => todo!(),
         }

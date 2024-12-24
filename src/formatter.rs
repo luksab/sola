@@ -195,6 +195,7 @@ impl Format for If<'_> {
         fmt.push_str(" ");
         self.body.format(fmt);
         if let Some(else_) = &self.else_body {
+            fmt.push_str(" else ");
             else_.format(fmt);
         }
     }

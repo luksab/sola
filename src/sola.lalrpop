@@ -79,9 +79,9 @@ Statement: Statement<'input> = {
         Statement::Let(Let{name, tipe: t, value: e}),
     "return" <e:Expression> ";" => Statement::Return(e),
     // "if" <e:Expression> "{" <b:Block> "}" => {
-    //     Statement::Expression(Box::new(Expression::If(If {
+    //     Statement::If(If {
     //         condition: e, body: Box::new(Expression::Block(b)), else_body: None
-    //         })))
+    //     })
     // },
     // "if" <e:Expression> "{" <b:Block> "}" "else" "{" <be:Block> "}" => {
     //     Statement::Expression(Box::new(Expression::If(If {
@@ -99,11 +99,6 @@ Expr: Box<Expression<'input>> = {
     "(" <Expression> ")",
     // "{" <s:(Statement)*> "}" => Box::new(Expression::Block(s)),
     // "{" <b:Block> "}" => Box::new(Expression::Block(b)),
-    "if" <e:Expression> <b:Block> => {
-        Box::new(Expression::If(If {
-            condition: e, body: Box::new(Expression::Block(b)), else_body: None
-            }))
-    },
     "if" <e:Expression> <b:Block> "else" <be:Block> => {
         Box::new(Expression::If(If {
             condition: e, body: Box::new(Expression::Block(b)), else_body: Some(Box::new(Expression::Block(be)))
