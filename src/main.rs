@@ -1,9 +1,11 @@
 pub mod base_ast;
-pub mod formatter;
 pub mod compile;
 pub mod compiler;
+pub mod formatter;
 
+use base_ast::SolaParseError;
 use colored::*;
+use inkwell::OptimizationLevel;
 use lalrpop_util::{lexer::Token, ErrorRecovery, ParseError};
 use std::ops::Range;
 use structopt::StructOpt;
@@ -11,7 +13,7 @@ use structopt::StructOpt;
 lalrpop_util::lalrpop_mod!(pub sola);
 
 /// Print a parse error to error stream.
-fn print_parse_error(error: &ParseError<usize, Token, &str>, input: &str) {
+fn print_parse_error(error: &ParseError<usize, Token, SolaParseError>, input: &str) {
     match error.clone() {
         ParseError::InvalidToken { location } => {
             println!(
@@ -75,7 +77,7 @@ fn print_parse_error(error: &ParseError<usize, Token, &str>, input: &str) {
 }
 
 /// prints all errors in the given input
-fn print_parse_errs(errs: &Vec<ErrorRecovery<usize, Token, &str>>, input: &str) {
+fn print_parse_errs(errs: &Vec<ErrorRecovery<usize, Token, SolaParseError>>, input: &str) {
     for err in errs {
         print_parse_error(&err.error, input);
     }
@@ -128,8 +130,11 @@ fn print_error_line(input: &str, range: Range<usize>) {
 fn parse(
     input: &str,
 ) -> Result<
-    (base_ast::Program, Vec<ErrorRecovery<usize, Token, &str>>),
-    ParseError<usize, Token, &str>,
+    (
+        base_ast::Program,
+        Vec<ErrorRecovery<usize, Token, SolaParseError>>,
+    ),
+    ParseError<usize, Token, SolaParseError>,
 > {
     let mut errors = Vec::new();
     let ast = sola::ProgramParser::new().parse(&mut errors, input);
@@ -152,6 +157,14 @@ struct Opt {
     /// Print the AST
     #[structopt(short, long)]
     ast: bool,
+
+    /// Optimization level
+    /// 0: No optimization
+    /// 1: Less optimization
+    /// 2: Default optimization
+    /// 3: Aggressive optimization
+    #[structopt(short = "O", long, default_value = "2")]
+    optimization: u8,
 }
 
 fn main() {
@@ -180,5 +193,13 @@ fn main() {
         print!("{}", formatter::format(&program));
     }
 
-    compile::compile(&program);
+    let level = match opt.optimization {
+        0 => OptimizationLevel::None,
+        1 => OptimizationLevel::Less,
+        2 => OptimizationLevel::Default,
+        3 => OptimizationLevel::Aggressive,
+        _ => panic!("Invalid optimization level"),
+    };
+
+    compile::compile(&program, level);
 }

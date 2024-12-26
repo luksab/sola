@@ -1,7 +1,24 @@
 use colored::Colorize;
-use std::fmt::{Debug, Display, Error};
+use std::{
+    fmt::{Debug, Display, Error},
+    num::ParseIntError,
+};
 
 use crate::formatter::{Format, Formatter};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SolaParseError {
+    NumberError(ParseIntError),
+}
+
+impl Display for SolaParseError {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> Result<(), Error> {
+        use self::SolaParseError::*;
+        match *self {
+            NumberError(ref e) => write!(fmt, "Number error: {}", e),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct Program<'input> {

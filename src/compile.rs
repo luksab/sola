@@ -8,7 +8,7 @@ use inkwell::{
 
 use crate::{base_ast::Program, compiler::Compiler};
 
-fn run_passes_on(module: &Module) {
+fn run_passes_on(module: &Module, level: OptimizationLevel) {
     Target::initialize_all(&InitializationConfig::default());
     let target_triple = TargetMachine::get_default_triple();
     let target = Target::from_triple(&target_triple).unwrap();
@@ -17,21 +17,32 @@ fn run_passes_on(module: &Module) {
             &target_triple,
             "generic",
             "",
-            OptimizationLevel::None,
+            level,
             RelocMode::PIC,
             CodeModel::Default,
         )
         .unwrap();
 
-    let passes: &[&str] = &[
-        "instcombine",
-        "reassociate",
-        "gvn",
-        "simplifycfg",
-        // "basic-aa",
-        "mem2reg",
-        // "default<O3>",
-    ];
+    let passes: &[&str] = match level {
+        OptimizationLevel::None | OptimizationLevel::Less | OptimizationLevel::Default => &[
+            "instcombine",
+            "reassociate",
+            "gvn",
+            "simplifycfg",
+            // "basic-aa",
+            "mem2reg",
+            // "default<O3>",
+        ],
+        OptimizationLevel::Aggressive => &[
+            "instcombine",
+            "reassociate",
+            "gvn",
+            "simplifycfg",
+            // "basic-aa",
+            "mem2reg",
+            // "default<O3>",
+        ],
+    };
 
     module
         .run_passes(
@@ -42,13 +53,14 @@ fn run_passes_on(module: &Module) {
         .unwrap();
 }
 
-pub fn compile(program: &Program) {
+pub fn compile(program: &Program, level: OptimizationLevel) {
     let context = Context::create();
     let builder = context.create_builder();
     let module = context.create_module("tmp");
     Compiler::compile(&context, &builder, &module, program).unwrap();
     println!("compiled");
-    run_passes_on(&module);
+
+    run_passes_on(&module, level);
 
     module.print_to_stderr();
 
@@ -60,7 +72,7 @@ pub fn compile(program: &Program) {
             &target_triple,
             "generic",
             "",
-            OptimizationLevel::None,
+            level,
             RelocMode::PIC,
             CodeModel::Default,
         )
@@ -87,12 +99,12 @@ pub fn compile(program: &Program) {
         .unwrap();
 
     // link object file
-    let output = std::process::Command::new("clang")
-        .arg("output.o")
-        .arg("-o")
-        .arg("output")
-        .output()
-        .expect("Failed to execute process");
+    let mut binding = std::process::Command::new("clang");
+    let linker_command = binding.arg("output.o").arg("-o").arg("output");
+    if let OptimizationLevel::Aggressive = level {
+        linker_command.arg("-O3");
+    }
+    let output = linker_command.output().expect("Failed to execute process");
 
     println!("clang output: {}", String::from_utf8_lossy(&output.stdout));
 }
