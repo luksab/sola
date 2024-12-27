@@ -2,11 +2,13 @@ pub mod base_ast;
 pub mod compile;
 pub mod compiler;
 pub mod formatter;
+pub mod parser;
 
 use base_ast::SolaParseError;
 use colored::*;
 use inkwell::OptimizationLevel;
 use lalrpop_util::{lexer::Token, ErrorRecovery, ParseError};
+use parser::parse_program;
 use std::ops::Range;
 use structopt::StructOpt;
 
@@ -169,23 +171,64 @@ struct Opt {
 
 fn main() {
     let opt: Opt = Opt::from_args();
-    let input = std::fs::read_to_string(opt.input).unwrap();
-    let program = match parse(&input) {
-        Ok(ast) => {
-            print_parse_errs(&ast.1, &input);
-            // if opt.ast {
-            //     println!("{:#?}", ast.0);
-            // } else {
-            //     print!("{}", formatter::format(&ast.0));
-            // }
-            ast.0
+    let input = std::fs::read_to_string(&opt.input).unwrap();
+    println!("{}", input);
+    let program = parse_program(&input);
+    println!("{:?}", program);
+    if let Err(err) = program {
+        use ariadne::{Color, ColorGenerator, Fmt, Label, Report, ReportKind, Source};
+
+        let mut colors = ColorGenerator::new();
+
+        // Generate & choose some colours for each of our elements
+        let a = colors.next();
+        let b = colors.next();
+        let out = Color::Fixed(81);
+
+        for err in err {
+            let input_path = opt.input.to_str();
+            match err.reason() {
+                chumsky::error::SimpleReason::Unexpected => {
+                    Report::build(ReportKind::Error, (input_path.unwrap(), err.span()))
+                        .with_label(
+                            Label::new((input_path.unwrap(), err.span()))
+                                .with_message(format!(
+                                    "Unexpected token: \"{:?}\"",
+                                    err.found().unwrap()
+                                ))
+                                .with_color(a),
+                        )
+                        .with_message(format!(
+                            "Expected one of: {:?}",
+                            err.expected().collect::<Vec<_>>()
+                        ))
+                        .finish()
+                        .print((input_path.unwrap(), Source::from(&input)))
+                        .unwrap()
+                }
+                chumsky::error::SimpleReason::Unclosed { span, delimiter } => todo!(),
+                chumsky::error::SimpleReason::Custom(_) => todo!(),
+            }
         }
-        Err(err) => {
-            print_parse_error(&err, &input);
-            return;
-        }
-    };
+        std::process::exit(1);
+    }
+    // let program = match parse(&input) {
+    //     Ok(ast) => {
+    //         print_parse_errs(&ast.1, &input);
+    //         // if opt.ast {
+    //         //     println!("{:#?}", ast.0);
+    //         // } else {
+    //         //     print!("{}", formatter::format(&ast.0));
+    //         // }
+    //         ast.0
+    //     }
+    //     Err(err) => {
+    //         print_parse_error(&err, &input);
+    //         return;
+    //     }
+    // };
     // let program: resolved_ast::Program = program.into();
+    let program = program.unwrap();
 
     if opt.ast {
         println!("{:#?}", program);
