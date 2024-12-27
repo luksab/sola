@@ -49,19 +49,23 @@ Identifier: &'input str = {
 // Function grammar
 
 Function: Function<'input> = {
-    <definition: FunctionDefinition> <body:Block> => Function {
+    "extern fn" <definition: FunctionDefinition> => Function {
+        definition: definition,
+        body: None,
+    },
+    "fn " <definition: FunctionDefinition> <body:Block> => Function {
         definition: definition,
         body: Some(Box::new(Expression::Block(body))),
     },
 };
 
 FunctionDefinition: FunctionDefinition<'input> = {
-    "fn " <name:Identifier> "(" <params:(Parameter)*> ")" "->" <return_type: Type> => FunctionDefinition {
+    <name:Identifier> "(" <params:(Parameter)*> ")" "->" <return_type: Type> => FunctionDefinition {
         name: name,
         params: params,
         return_type: Some(return_type),
     },
-    "fn " <name:Identifier> "(" <params:(Parameter)*> ")" => FunctionDefinition {
+    <name:Identifier> "(" <params:(Parameter)*> ")" => FunctionDefinition {
         name: name,
         params: params,
         return_type: None,
@@ -84,7 +88,8 @@ Type: Type<'input> = {
 Statement: Statement<'input> = {
     "let " <name:Identifier>":" <t:Type> "=" <e:Expression> ";" => 
         Statement::Let(Let{name, tipe: t, value: e}),
-    "return" <e:Expression> ";" => Statement::Return(e),
+    "return" <e:Expression> ";" => Statement::Return(Some(e)),
+    "return" ";" => Statement::Return(None),
     // "if" <e:Expression> "{" <b:Block> "}" => {
     //     Statement::If(If {
     //         condition: e, body: Box::new(Expression::Block(b)), else_body: None
@@ -101,12 +106,17 @@ Statement: Statement<'input> = {
 };
 
 Expr: Box<Expression<'input>> = {
-    Num => Box::new(Expression::Number(<>)),
+    Literal => Box::new(Expression::Literal(<>)),
     <s:r#""[^"]*""#> => Box::new(Expression::String(ASTString{value: <>})),
     "(" <Expression> ")",
     "if" <e:Expression> <b:Block> "else" <be:Block> => {
         Box::new(Expression::If(If {
             condition: e, body: Box::new(Expression::Block(b)), else_body: Some(Box::new(Expression::Block(be)))
+        }))
+    },
+    "if" <e:Expression> <b:Block> => {
+        Box::new(Expression::If(If {
+            condition: e, body: Box::new(Expression::Block(b)), else_body: None
         }))
     },
     "while" <e:Expression> <b:Block> => {
@@ -178,9 +188,20 @@ ExprOp: Opcode = {
 FactorOp: Opcode = {
     "*" => Opcode::Mul,
     "/" => Opcode::Div,
+    "%" => Opcode::Mod,
 };
 
 
-Num: i32 = {
+Literal: Literal<'input> = {
+    <n:Integer> => Literal::Integer(n),
+    <b:Bool> => Literal::Bool(b),
+};
+
+Integer: i32 = {
     r"[0-9]+" =>? Ok(i32::from_str(<>).map_err(|err| SolaParseError::NumberError(err))?)
+};
+
+Bool: bool = {
+    "true" => true,
+    "false" => false,
 };

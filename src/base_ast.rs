@@ -79,7 +79,7 @@ impl Display for Parameter<'_> {
 pub enum Statement<'input> {
     Let(Let<'input>),
     Expression(Box<Expression<'input>>),
-    Return(Box<Expression<'input>>),
+    Return(Option<Box<Expression<'input>>>),
     Comment(Comment<'input>),
     Error,
 }
@@ -121,12 +121,19 @@ pub enum Expression<'input> {
     While(While<'input>),
     FunctionCall(FunctionCall<'input>),
     Variable(Variable<'input>),
-    Number(i32),
+    Literal(Literal<'input>),
     String(ASTString<'input>),
     If(If<'input>),
     Op(Box<Expression<'input>>, Opcode, Box<Expression<'input>>),
     ExpressionComment((Box<Expression<'input>>, Comment<'input>)),
     Error,
+}
+
+#[derive(Debug)]
+pub enum Literal<'input> {
+    Integer(i32),
+    Bool(bool),
+    String(&'input str),
 }
 
 #[derive(Debug)]
@@ -196,6 +203,7 @@ pub enum Opcode {
     Assign,
     Mul,
     Div,
+    Mod,
     Add,
     Sub,
     Eq,
@@ -224,6 +232,7 @@ impl Debug for Opcode {
             Assign => write!(fmt, "="),
             Mul => write!(fmt, "*"),
             Div => write!(fmt, "/"),
+            Mod => write!(fmt, "%"),
             Add => write!(fmt, "+"),
             Sub => write!(fmt, "-"),
             Eq => write!(fmt, "=="),
@@ -243,6 +252,7 @@ impl Display for Opcode {
             Assign => write!(fmt, "="),
             Mul => write!(fmt, "*"),
             Div => write!(fmt, "/"),
+            Mod => write!(fmt, "%"),
             Add => write!(fmt, "+"),
             Sub => write!(fmt, "-"),
             Eq => write!(fmt, "=="),

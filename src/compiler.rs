@@ -5,7 +5,7 @@ use inkwell::{
     context::Context,
     module::Module,
     types::BasicMetadataTypeEnum,
-    values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, PointerValue},
+    values::{BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, PointerValue},
 };
 
 use crate::base_ast::{Expression, Function, FunctionDefinition, Program, Type};
@@ -45,6 +45,9 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 
         match tipe {
             Type::I32 => builder.build_alloca(self.context.i32_type(), name).unwrap(),
+            Type::Bool => builder
+                .build_alloca(self.context.bool_type(), name)
+                .unwrap(),
             _ => unimplemented!(),
         }
     }
@@ -59,6 +62,10 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
             Type::I32 => self
                 .builder
                 .build_load(self.context.i32_type(), ptr, name)
+                .unwrap(),
+            Type::Bool => self
+                .builder
+                .build_load(self.context.bool_type(), ptr, name)
                 .unwrap(),
             _ => unimplemented!(),
         }
@@ -144,16 +151,9 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         // compile body
         let body = self.compile_expr(function.body.as_ref().unwrap())?;
 
-        let body = match body {
-            Some(body) => body,
-            None => {
-                return Err(
-                    "Error compiling function body. Body does not return anything.".to_string(),
-                )
-            }
-        };
-
-        self.builder.build_return(Some(&body)).unwrap();
+        self.builder
+            .build_return(body.as_ref().map(|b| b as &dyn BasicValue))
+            .unwrap();
 
         // return the whole thing after verification and optimization
         if function_val.verify(true) {
@@ -248,7 +248,11 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                             if let Some(_return_value) = &block.return_value {
                                 eprintln!("Warning: Unreachable code after return statement.");
                             }
-                            return Ok(self.compile_expr(&expr)?);
+                            if let Some(return_value) = expr {
+                                return Ok(self.compile_expr(return_value)?);
+                            } else {
+                                return Ok(None);
+                            }
                         }
                         crate::base_ast::Statement::Comment(_comment) => (),
                         crate::base_ast::Statement::Error => todo!(),
@@ -285,7 +289,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                             .left()
                         {
                             Some(value) => Ok(Some(value)),
-                            None => Err("Invalid call produced.".to_string()),
+                            None => Ok(None),
                         }
                     }
                     None => Err("Unknown function.".to_string()),
@@ -293,21 +297,24 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
             }
             Expression::Variable(variable) => match self.variables.get(variable.name) {
                 Some(var) => Ok(Some(self.build_load(var.0, variable.name, var.1))),
-                None => Err("Could not find a matching variable.".to_string()),
+                None => Err(format!("Undefined variable: {}", variable.name)),
             },
-            Expression::Number(number) => Ok(Some(BasicValueEnum::IntValue(
-                self.context.i32_type().const_int(*number as u64, false),
-            ))),
+            Expression::Literal(lit) => {
+                use crate::base_ast::Literal::*;
+                match lit {
+                    Integer(num) => Ok(Some(BasicValueEnum::IntValue(
+                        self.context.i32_type().const_int(*num as u64, false),
+                    ))),
+                    Bool(b) => Ok(Some(BasicValueEnum::IntValue(
+                        self.context.bool_type().const_int(*b as u64, false),
+                    ))),
+                    String(_) => todo!(),
+                }
+            }
             Expression::String(aststring) => todo!(),
             Expression::If(if_expr) => {
-                let (condition, body, else_body) = (
-                    &if_expr.condition,
-                    &if_expr.body,
-                    if_expr
-                        .else_body
-                        .as_ref()
-                        .expect("If expression must have an else body"),
-                );
+                let (condition, body, else_body) =
+                    (&if_expr.condition, &if_expr.body, &if_expr.else_body);
                 let parent = self.fn_value();
 
                 // create condition by comparing without 0.0 and returning an int
@@ -347,18 +354,17 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 
                 // build then block
                 self.builder.position_at_end(then_bb);
-                let then_val = self
-                    .compile_expr(body)?
-                    .expect("If body must return a value");
+                let then_val = self.compile_expr(body)?;
                 self.builder.build_unconditional_branch(cont_bb).unwrap();
 
                 let then_bb = self.builder.get_insert_block().unwrap();
 
                 // build else block
                 self.builder.position_at_end(else_bb);
-                let else_val = self
-                    .compile_expr(else_body)?
-                    .expect("Else body must return a value");
+                let else_val = match else_body {
+                    Some(else_body) => self.compile_expr(else_body)?,
+                    None => None,
+                };
                 self.builder.build_unconditional_branch(cont_bb).unwrap();
 
                 let else_bb = self.builder.get_insert_block().unwrap();
@@ -366,16 +372,23 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 // emit merge block
                 self.builder.position_at_end(cont_bb);
 
-                let phi_type = match then_val {
-                    BasicValueEnum::IntValue(_) => self.context.i32_type(),
-                    _ => todo!(),
-                };
+                match (then_val, else_val) {
+                    (Some(then_val), Some(else_val)) => {
+                        let phi_type = match (then_val, else_val) {
+                            (BasicValueEnum::IntValue(_), BasicValueEnum::IntValue(_)) => {
+                                self.context.i32_type()
+                            }
+                            _ => todo!(),
+                        };
 
-                let phi = self.builder.build_phi(phi_type, "iftmp").unwrap();
+                        let phi = self.builder.build_phi(phi_type, "iftmp").unwrap();
 
-                phi.add_incoming(&[(&then_val, then_bb), (&else_val, else_bb)]);
+                        phi.add_incoming(&[(&then_val, then_bb), (&else_val, else_bb)]);
 
-                Ok(Some(phi.as_basic_value()))
+                        Ok(Some(phi.as_basic_value()))
+                    }
+                    _ => Ok(None),
+                }
             }
             Expression::While(while_) => {
                 let parent = self.fn_value();
@@ -447,6 +460,11 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                             ))),
                             Mul => Ok(Some(BasicValueEnum::IntValue(
                                 self.builder.build_int_mul(lhs, rhs, "tmpmul").unwrap(),
+                            ))),
+                            Mod => Ok(Some(BasicValueEnum::IntValue(
+                                self.builder
+                                    .build_int_signed_rem(lhs, rhs, "tmpmod")
+                                    .unwrap(),
                             ))),
                             Div => Ok(Some(BasicValueEnum::IntValue(
                                 self.builder

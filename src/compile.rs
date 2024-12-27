@@ -104,7 +104,5 @@ pub fn compile(program: &Program, level: OptimizationLevel) {
     if let OptimizationLevel::Aggressive = level {
         linker_command.arg("-O3");
     }
-    let output = linker_command.output().expect("Failed to execute process");
-
-    println!("clang output: {}", String::from_utf8_lossy(&output.stdout));
+    linker_command.status().expect("Failed to execute process");
 }

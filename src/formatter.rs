@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use colored::Colorize as _;
 
 use crate::base_ast::*;
@@ -125,7 +127,9 @@ impl Format for Statement<'_> {
             }
             Statement::Return(expr) => {
                 fmt.push_str_indented("return ");
-                expr.format(fmt);
+                if let Some(expr) = expr {
+                    expr.format(fmt);
+                }
                 fmt.push_str(";\n");
             }
             Statement::Comment(comment) => comment.format(fmt),
@@ -166,7 +170,7 @@ impl Format for Expression<'_> {
                 fmt.push_str_indented("}");
             }
             Expression::Variable(var) => fmt.push_string(var.to_string()),
-            Expression::Number(num) => fmt.push_string(num.to_string()),
+            Expression::Literal(lit) => fmt.push_string(lit.to_string()),
             Expression::String(str) => fmt.push_string(str.to_string()),
             Expression::Op(lhs, op, rhs) => {
                 fmt.push_str("(");
@@ -184,6 +188,16 @@ impl Format for Expression<'_> {
             }
             Expression::While(while_) => while_.format(fmt),
             Expression::Error => fmt.push_string("error".red().to_string()),
+        }
+    }
+}
+
+impl Display for Literal<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Literal::Integer(num) => write!(f, "{}", num),
+            Literal::Bool(b) => write!(f, "{}", b),
+            Literal::String(s) => write!(f, "\"{}\"", s),
         }
     }
 }
