@@ -554,6 +554,25 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     _ => todo!(),
                 }
             }
+            Expression::UnaryOp(opcode, expr) => {
+                let expr = self
+                    .compile_expr(expr)?
+                    .expect("Unary operation must return a value.");
+
+                use crate::base_ast::Opcode::*;
+                match expr {
+                    BasicValueEnum::IntValue(expr) => match opcode {
+                        Sub => Ok(Some(BasicValueEnum::IntValue(
+                            self.builder.build_int_neg(expr, "tmpneg").unwrap(),
+                        ))),
+                        Not => Ok(Some(BasicValueEnum::IntValue(
+                            self.builder.build_not(expr, "tmpnot").unwrap(),
+                        ))),
+                        _ => todo!(),
+                    },
+                    _ => todo!(),
+                }
+            }
             Expression::ExpressionComment(_) => todo!(),
             Expression::Error => todo!(),
         }

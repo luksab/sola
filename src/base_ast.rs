@@ -125,6 +125,7 @@ pub enum Expression<'input> {
     String(ASTString<'input>),
     If(If<'input>),
     Op(Box<Expression<'input>>, Opcode, Box<Expression<'input>>),
+    UnaryOp(Opcode, Box<Expression<'input>>),
     ExpressionComment((Box<Expression<'input>>, Comment<'input>)),
     Error,
 }
@@ -212,6 +213,7 @@ pub enum Opcode {
     Le,
     Gt,
     Ge,
+    Not,
 }
 
 impl<'input> Debug for ExprSymbol<'input> {
@@ -241,6 +243,7 @@ impl Debug for Opcode {
             Le => write!(fmt, "<="),
             Gt => write!(fmt, ">"),
             Ge => write!(fmt, ">="),
+            Not => write!(fmt, "!"),
         }
     }
 }
@@ -261,6 +264,7 @@ impl Display for Opcode {
             Le => write!(fmt, "<="),
             Gt => write!(fmt, ">"),
             Ge => write!(fmt, ">="),
+            Not => write!(fmt, "!"),
         }
     }
 }

@@ -181,6 +181,12 @@ impl Format for Expression<'_> {
                 rhs.format(fmt);
                 fmt.push_str(")");
             }
+            Expression::UnaryOp(op, expr) => {
+                fmt.push_string(op.to_string());
+                fmt.push_str("(");
+                expr.format(fmt);
+                fmt.push_str(")");
+            }
             Expression::If(if_) => if_.format(fmt),
             Expression::ExpressionComment((expr, comment)) => {
                 expr.format(fmt);

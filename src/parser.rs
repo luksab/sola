@@ -31,6 +31,8 @@ pub enum Token<'input> {
     Slash,
     #[token("%")]
     Percent,
+    #[token("!")]
+    Exclam,
 
     // Keywords
     #[token("extern")]
@@ -191,23 +193,28 @@ fn block_parser<'input>(
         + 'input,
 ) -> impl Parser<Token<'input>, Block<'input>, Error = Simple<Token<'input>>> {
     // { <statements> <expr>? }
-    just(Token::LBrace)
-        .ignore_then(statement_parser(expr_parser.clone()).repeated())
-        .then(
-            expr_parser
-                .clone()
-                .or_not()
-                .map(|opt_expr| opt_expr.map(Box::new)),
-        )
-        .then_ignore(just(Token::RBrace))
-        .map(|(statements, ret_expr)| Block {
-            statements,
-            return_value: ret_expr.map(|b| *b),
-        })
+    recursive(|block| {
+        just(Token::LBrace)
+            .ignore_then(statement_parser(expr_parser.clone(), block.clone()).repeated())
+            .then(
+                expr_parser
+                    .clone()
+                    .or_not()
+                    .map(|opt_expr| opt_expr.map(Box::new)),
+            )
+            .then_ignore(just(Token::RBrace))
+            .map(|(statements, ret_expr)| Block {
+                statements,
+                return_value: ret_expr.map(|b| *b),
+            })
+    })
 }
 
 fn statement_parser<'input>(
     expr_parser: impl Parser<Token<'input>, Box<Expression<'input>>, Error = Simple<Token<'input>>>
+        + Clone
+        + 'input,
+    block_parser: impl Parser<Token<'input>, Block<'input>, Error = Simple<Token<'input>>>
         + Clone
         + 'input,
 ) -> impl Parser<Token<'input>, Statement<'input>, Error = Simple<Token<'input>>> {
@@ -236,6 +243,28 @@ fn statement_parser<'input>(
             .ignore_then(expr_parser.clone().or_not())
             .then_ignore(just(Token::Semicolon))
             .map(|expr| Statement::Return(expr)),
+        // if <expr> { <block> } (else { <block> })?
+        just(Token::If)
+            .ignore_then(expr_parser.clone())
+            .then(block_parser.clone())
+            .then(just(Token::Else).ignore_then(block_parser.clone()).or_not())
+            .map(|((condition, body), else_opt)| {
+                Statement::Expression(Box::new(Expression::If(If {
+                    condition,
+                    body: Box::new(Expression::Block(body)),
+                    else_body: else_opt.map(|b| Box::new(Expression::Block(b))),
+                })))
+            }),
+        // while <expr> { <block> }
+        just(Token::While)
+            .ignore_then(expr_parser.clone())
+            .then(block_parser.clone())
+            .map(|(condition, body)| {
+                Statement::Expression(Box::new(Expression::While(While {
+                    condition,
+                    body: Box::new(Expression::Block(body)),
+                })))
+            }),
         // expression ;
         expr_parser
             .clone()
@@ -244,6 +273,7 @@ fn statement_parser<'input>(
         // comment
         comment_parser().map(|c| Statement::Comment(c)),
     ))
+    .then_ignore(just(Token::Semicolon).repeated())
 }
 
 fn expression_parser<'input>(
@@ -294,17 +324,6 @@ fn expression_parser<'input>(
             })
             .boxed();
 
-        let while_expr = just(Token::While)
-            .ignore_then(expr.clone())
-            .then(block_parser(expr.clone()))
-            .map(|(condition, body)| {
-                Expression::While(While {
-                    condition,
-                    body: Box::new(Expression::Block(body)),
-                })
-            })
-            .boxed();
-
         let func_call = identifier_parser()
             .then_ignore(just(Token::LParen))
             .then(
@@ -317,12 +336,22 @@ fn expression_parser<'input>(
             .boxed();
 
         let atom = choice((
-            func_call, literal, paren_expr, variable, block_expr, if_expr, while_expr,
+            func_call, literal, paren_expr, variable, block_expr, if_expr,
         ))
         .boxed()
         .map(Box::new);
 
-        let factor = atom
+        let unary_ops = choice((
+            just(Token::Plus).to(Opcode::Add),
+            just(Token::Minus).to(Opcode::Sub),
+            just(Token::Exclam).to(Opcode::Not),
+        ))
+        .repeated()
+        .clone()
+        .then(atom.clone())
+        .foldr(|op, expr| Box::new(Expression::UnaryOp(op, expr)));
+
+        let factor = unary_ops
             .clone()
             .then(
                 choice((
