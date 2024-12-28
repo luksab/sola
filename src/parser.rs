@@ -99,7 +99,7 @@ pub fn parser<'input>() -> impl Parser<Token<'input>, Program<'input>, Error = S
 }
 
 fn program_parser<'input>(
-    expr_parser: impl Parser<Token<'input>, Box<Expression<'input>>, Error = Simple<Token<'input>>>
+    expr_parser: impl Parser<Token<'input>, Spanned<Expression<'input>>, Error = Simple<Token<'input>>>
         + Clone
         + 'input,
 ) -> impl Parser<Token<'input>, Program<'input>, Error = Simple<Token<'input>>> {
@@ -110,7 +110,7 @@ fn program_parser<'input>(
 }
 
 fn top_level_parser<'input>(
-    expr_parser: impl Parser<Token<'input>, Box<Expression<'input>>, Error = Simple<Token<'input>>>
+    expr_parser: impl Parser<Token<'input>, Spanned<Expression<'input>>, Error = Simple<Token<'input>>>
         + Clone
         + 'input,
 ) -> impl Parser<Token<'input>, TopLevel<'input>, Error = Simple<Token<'input>>> {
@@ -129,25 +129,31 @@ fn comment_parser<'input>(
 }
 
 fn function_parser<'input>(
-    expr_parser: impl Parser<Token<'input>, Box<Expression<'input>>, Error = Simple<Token<'input>>>
+    expr_parser: impl Parser<Token<'input>, Spanned<Expression<'input>>, Error = Simple<Token<'input>>>
         + Clone
         + 'input,
 ) -> impl Parser<Token<'input>, Function<'input>, Error = Simple<Token<'input>>> {
     // {extern} fn <identifier> ( <params> ) -> <type> { ... }
     let extern_fn = just(Token::Extern)
         .then_ignore(just(Token::Fn))
-        .ignore_then(function_definition_parser())
-        .map(|definition| Function {
+        .ignore_then(
+            function_definition_parser().map_with_span(|definition, span| (definition, span)),
+        )
+        .map_with_span(|definition, span| Function {
             definition,
             body: None,
+            span,
         });
 
     extern_fn.or(just(Token::Fn)
-        .ignore_then(function_definition_parser())
-        .then(block_parser(expr_parser))
-        .map(|(definition, body)| Function {
+        .ignore_then(
+            function_definition_parser().map_with_span(|definition, span| (definition, span)),
+        )
+        .then(block_parser(expr_parser).map_with_span(|b, s| (b, s)))
+        .map_with_span(|(definition, body), span| Function {
             definition,
-            body: Some(Box::new(Expression::Block(body))),
+            body: Some(Box::new((Expression::Block(body.0), body.1))),
+            span,
         }))
 }
 
@@ -176,7 +182,7 @@ fn parameter_parser<'input>(
     identifier_parser()
         .then_ignore(just(Token::Colon)) // or parse ':' properly if you want
         .then(type_parser())
-        .map(|(name, tipe)| Parameter { name, tipe })
+        .map_with_span(|(name, tipe), span| Parameter { name, tipe, span })
 }
 
 fn type_parser<'input>() -> impl Parser<Token<'input>, Type<'input>, Error = Simple<Token<'input>>>
@@ -188,7 +194,7 @@ fn type_parser<'input>() -> impl Parser<Token<'input>, Type<'input>, Error = Sim
 }
 
 fn block_parser<'input>(
-    expr_parser: impl Parser<Token<'input>, Box<Expression<'input>>, Error = Simple<Token<'input>>>
+    expr_parser: impl Parser<Token<'input>, Spanned<Expression<'input>>, Error = Simple<Token<'input>>>
         + Clone
         + 'input,
 ) -> impl Parser<Token<'input>, Block<'input>, Error = Simple<Token<'input>>> {
@@ -203,15 +209,15 @@ fn block_parser<'input>(
                     .map(|opt_expr| opt_expr.map(Box::new)),
             )
             .then_ignore(just(Token::RBrace))
-            .map(|(statements, ret_expr)| Block {
+            .map(|(statements, return_value)| Block {
                 statements,
-                return_value: ret_expr.map(|b| *b),
+                return_value,
             })
     })
 }
 
 fn statement_parser<'input>(
-    expr_parser: impl Parser<Token<'input>, Box<Expression<'input>>, Error = Simple<Token<'input>>>
+    expr_parser: impl Parser<Token<'input>, Spanned<Expression<'input>>, Error = Simple<Token<'input>>>
         + Clone
         + 'input,
     block_parser: impl Parser<Token<'input>, Block<'input>, Error = Simple<Token<'input>>>
@@ -242,34 +248,44 @@ fn statement_parser<'input>(
         just(Token::Return)
             .ignore_then(expr_parser.clone().or_not())
             .then_ignore(just(Token::Semicolon))
-            .map(|expr| Statement::Return(expr)),
+            .map(|expr| Statement::Return(expr.map(Box::new))),
         // if <expr> { <block> } (else { <block> })?
         just(Token::If)
             .ignore_then(expr_parser.clone())
-            .then(block_parser.clone())
-            .then(just(Token::Else).ignore_then(block_parser.clone()).or_not())
-            .map(|((condition, body), else_opt)| {
-                Statement::Expression(Box::new(Expression::If(If {
-                    condition,
-                    body: Box::new(Expression::Block(body)),
-                    else_body: else_opt.map(|b| Box::new(Expression::Block(b))),
-                })))
+            .then(block_parser.clone().map_with_span(|b, s| (b, s)))
+            .then(
+                just(Token::Else)
+                    .ignore_then(block_parser.clone().map_with_span(|b, s| (b, s)))
+                    .or_not(),
+            )
+            .map_with_span(|((condition, body), else_opt), span| {
+                Statement::Expression(Box::new((
+                    Expression::If(If {
+                        condition: Box::new(condition),
+                        body: Box::new((Expression::Block(body.0), body.1)),
+                        else_body: else_opt.map(|b| Box::new((Expression::Block(b.0), b.1))),
+                    }),
+                    span,
+                )))
             }),
         // while <expr> { <block> }
         just(Token::While)
             .ignore_then(expr_parser.clone())
-            .then(block_parser.clone())
-            .map(|(condition, body)| {
-                Statement::Expression(Box::new(Expression::While(While {
-                    condition,
-                    body: Box::new(Expression::Block(body)),
-                })))
+            .then(block_parser.clone().map_with_span(|b, s| (b, s)))
+            .map_with_span(|(condition, body), span| {
+                Statement::Expression(Box::new((
+                    Expression::While(While {
+                        condition: Box::new(condition),
+                        body: Box::new((Expression::Block(body.0), body.1)),
+                    }),
+                    span,
+                )))
             }),
         // expression ;
         expr_parser
             .clone()
             .then_ignore(just(Token::Semicolon))
-            .map(|expr| Statement::Expression(Box::new(*expr))),
+            .map(|expr| Statement::Expression(Box::new(expr))),
         // comment
         comment_parser().map(|c| Statement::Comment(c)),
     ))
@@ -277,124 +293,182 @@ fn statement_parser<'input>(
 }
 
 fn expression_parser<'input>(
-) -> impl Parser<Token<'input>, Box<Expression<'input>>, Error = Simple<Token<'input>>> {
+) -> impl Parser<Token<'input>, Spanned<Expression<'input>>, Error = Simple<Token<'input>>> {
     // Recursive parser for expressions
-    recursive(|expr| {
-        let literal = choice((
-            filter_map(|span, token| match token {
-                Token::Integer(n) => Ok(Expression::Literal(Literal::Integer(n.parse().unwrap()))),
-                Token::BoolLiteral(b) => Ok(Expression::Literal(Literal::Bool(b == "true"))),
+    recursive(
+        |expr: Recursive<'_, Token<'_>, Spanned<Expression<'_>>, Simple<Token<'_>>>| {
+            let literal: BoxedParser<'_, Token<'_>, Spanned<Expression<'_>>, Simple<Token<'_>, _>> =
+                choice((
+                    filter_map(|span, token| match token {
+                        Token::Integer(n) => {
+                            Ok(Expression::Literal(Literal::Integer(n.parse().unwrap())))
+                        }
+                        Token::BoolLiteral(b) => {
+                            Ok(Expression::Literal(Literal::Bool(b == "true")))
+                        }
+                        _ => Err(Simple::expected_input_found(span, vec![], Some(token))),
+                    }),
+                    filter_map(|span, token| match token {
+                        Token::StrLit(s) => Ok(Expression::String(ASTString { value: s })),
+                        _ => Err(Simple::expected_input_found(span, vec![], Some(token))),
+                    }),
+                ))
+                .map_with_span(|e, s| (e, s))
+                .boxed();
+
+            let variable: BoxedParser<
+                '_,
+                Token<'_>,
+                Spanned<Expression<'_>>,
+                Simple<Token<'_>, _>,
+            > = filter_map(|span: Span, token| match token {
+                Token::Identifier(ident) => Ok((
+                    Expression::Variable(Variable {
+                        name: ident,
+                        span: span.clone(),
+                    }),
+                    span,
+                )),
                 _ => Err(Simple::expected_input_found(span, vec![], Some(token))),
-            }),
-            filter_map(|span, token| match token {
-                Token::StrLit(s) => Ok(Expression::String(ASTString { value: s })),
-                _ => Err(Simple::expected_input_found(span, vec![], Some(token))),
-            }),
-        ))
-        .boxed();
-
-        let variable = filter_map(|span, token| match token {
-            Token::Identifier(ident) => Ok(Expression::Variable(Variable { name: ident })),
-            _ => Err(Simple::expected_input_found(span, vec![], Some(token))),
-        })
-        .boxed();
-
-        let paren_expr = just(Token::LParen)
-            .ignore_then(expr.clone())
-            .then_ignore(just(Token::RParen))
-            .map(|e: Box<Expression<'_>>| *e)
-            .boxed();
-
-        let block_expr = block_parser(expr.clone()).map(Expression::Block).boxed();
-
-        let if_expr = just(Token::If)
-            .ignore_then(expr.clone())
-            .then(block_parser(expr.clone()))
-            .then(
-                just(Token::Else)
-                    .ignore_then(block_parser(expr.clone()))
-                    .or_not(),
-            )
-            .map(|((condition, body), else_opt)| {
-                Expression::If(If {
-                    condition,
-                    body: Box::new(Expression::Block(body)),
-                    else_body: else_opt.map(|b| Box::new(Expression::Block(b))),
-                })
             })
             .boxed();
 
-        let func_call = identifier_parser()
-            .then_ignore(just(Token::LParen))
-            .then(
-                expr.clone()
-                    .separated_by(just(Token::Comma))
-                    .allow_trailing(),
-            )
-            .then_ignore(just(Token::RParen))
-            .map(|(name, args)| Expression::FunctionCall(FunctionCall { name, args }))
+            let paren_expr = just(Token::LParen)
+                .ignore_then(expr.clone())
+                .then_ignore(just(Token::RParen))
+                .boxed();
+
+            let block_expr: BoxedParser<'_, Token<'_>, Spanned<Expression<'_>>, Simple<Token<'_>>> =
+                block_parser(expr.clone())
+                    .map_with_span(|b, span| (Expression::Block(b), span))
+                    .boxed();
+
+            let if_expr: BoxedParser<'_, Token<'_>, Spanned<Expression<'_>>, Simple<Token<'_>>> =
+                just(Token::If)
+                    .ignore_then(expr.clone())
+                    .then(block_parser(expr.clone()).map_with_span(|b, s| (b, s)))
+                    .then(
+                        just(Token::Else)
+                            .ignore_then(block_parser(expr.clone()).map_with_span(|b, s| (b, s)))
+                            .or_not(),
+                    )
+                    .map_with_span(|((condition, body), else_opt), span| {
+                        (
+                            Expression::If(If {
+                                condition: Box::new(condition),
+                                body: Box::new((Expression::Block(body.0), body.1)),
+                                else_body: else_opt
+                                    .map(|b| Box::new((Expression::Block(b.0), b.1))),
+                            }),
+                            span,
+                        )
+                    })
+                    .boxed();
+
+            let func_call: BoxedParser<'_, Token<'_>, Spanned<Expression<'_>>, Simple<Token<'_>>> =
+                identifier_parser()
+                    .then_ignore(just(Token::LParen))
+                    .then(
+                        expr.clone()
+                            .separated_by(just(Token::Comma))
+                            .allow_trailing(),
+                    )
+                    .then_ignore(just(Token::RParen))
+                    .map_with_span(|(name, args), span| {
+                        (Expression::FunctionCall(FunctionCall { name, args }), span)
+                    })
+                    .boxed();
+
+            let atom = choice((
+                func_call, literal, paren_expr, variable, block_expr, if_expr,
+            ))
             .boxed();
 
-        let atom = choice((
-            func_call, literal, paren_expr, variable, block_expr, if_expr,
-        ))
-        .boxed()
-        .map(Box::new);
-
-        let unary_ops = choice((
-            just(Token::Plus).to(Opcode::Add),
-            just(Token::Minus).to(Opcode::Sub),
-            just(Token::Exclam).to(Opcode::Not),
-        ))
-        .repeated()
-        .clone()
-        .then(atom.clone())
-        .foldr(|op, expr| Box::new(Expression::UnaryOp(op, expr)));
-
-        let factor = unary_ops
-            .clone()
-            .then(
-                choice((
-                    just(Token::Star).to(Opcode::Mul),
-                    just(Token::Slash).to(Opcode::Div),
-                    just(Token::Percent).to(Opcode::Mod),
-                ))
-                .then(atom.clone())
-                .repeated(),
-            )
-            .foldl(|lhs, (op, rhs)| Box::new(Expression::Op(lhs, op, rhs)));
-
-        let expr_ops = factor
-            .clone()
-            .then(
+            let unary_ops: BoxedParser<'_, Token<'_>, Spanned<Expression<'_>>, Simple<Token<'_>>> =
                 choice((
                     just(Token::Plus).to(Opcode::Add),
                     just(Token::Minus).to(Opcode::Sub),
+                    just(Token::Exclam).to(Opcode::Not),
                 ))
-                .then(factor)
-                .repeated(),
-            )
-            .foldl(|lhs, (op, rhs)| Box::new(Expression::Op(lhs, op, rhs)));
+                .repeated()
+                .clone()
+                .then(atom.clone())
+                .foldr(|op, expr| (Expression::UnaryOp(op, Box::new(expr)), 0..0))
+                .boxed();
 
-        let comp_ops = expr_ops
-            .clone()
-            .then(
-                choice((
-                    just(Token::Eq).to(Opcode::Eq),
-                    just(Token::Ne).to(Opcode::Ne),
-                    just(Token::Le).to(Opcode::Le),
-                    just(Token::Lt).to(Opcode::Lt),
-                    just(Token::Ge).to(Opcode::Ge),
-                    just(Token::Gt).to(Opcode::Gt),
-                    just(Token::Assign).to(Opcode::Assign),
-                ))
-                .then(expr_ops)
-                .repeated(),
-            )
-            .foldl(|lhs, (op, rhs)| Box::new(Expression::Op(lhs, op, rhs)));
+            let factor = unary_ops
+                .clone()
+                .then(
+                    choice((
+                        just(Token::Star).to(Opcode::Mul),
+                        just(Token::Slash).to(Opcode::Div),
+                        just(Token::Percent).to(Opcode::Mod),
+                    ))
+                    .then(atom.clone())
+                    .repeated(),
+                )
+                .foldl(|lhs, (op, rhs)| {
+                    (
+                        Expression::Op(Op {
+                            lhs: Box::new(lhs),
+                            op,
+                            rhs: Box::new(rhs),
+                        }),
+                        0..0,
+                    )
+                });
 
-        comp_ops
-    })
+            let expr_ops = factor
+                .clone()
+                .then(
+                    choice((
+                        just(Token::Plus).to(Opcode::Add),
+                        just(Token::Minus).to(Opcode::Sub),
+                    ))
+                    .then(factor)
+                    .repeated(),
+                )
+                .foldl(|lhs, (op, rhs)| {
+                    (
+                        Expression::Op(Op {
+                            lhs: Box::new(lhs),
+                            op,
+                            rhs: Box::new(rhs),
+                            // span: span,
+                        }),
+                        0..0,
+                    )
+                });
+
+            let comp_ops = expr_ops
+                .clone()
+                .then(
+                    choice((
+                        just(Token::Eq).to(Opcode::Eq),
+                        just(Token::Ne).to(Opcode::Ne),
+                        just(Token::Le).to(Opcode::Le),
+                        just(Token::Lt).to(Opcode::Lt),
+                        just(Token::Ge).to(Opcode::Ge),
+                        just(Token::Gt).to(Opcode::Gt),
+                        just(Token::Assign).to(Opcode::Assign),
+                    ))
+                    .then(expr_ops)
+                    .repeated(),
+                )
+                .foldl(|lhs, (op, rhs)| {
+                    (
+                        Expression::Op(Op {
+                            lhs: Box::new(lhs),
+                            op,
+                            rhs: Box::new(rhs),
+                        }),
+                        0..0,
+                    )
+                });
+
+            comp_ops
+        },
+    )
 }
 
 // Simple helper to parse identifiers from the Token stream.
@@ -428,10 +502,16 @@ pub fn parse_program(src: &str) -> Result<Program, Vec<Simple<Token<'_>>>> {
     let token_stream = chumsky::Stream::from_iter(src.len()..src.len(), token_iter);
 
     // 2) Parse the tokens into an AST
-    parser().parse(token_stream).map_err(|errs| {
+    let now = std::time::Instant::now();
+    let parser = parser();
+    println!("Parser created in {:?}", now.elapsed());
+    let now = std::time::Instant::now();
+    let res = parser.parse(token_stream).map_err(|errs| {
         // Convert token-based errors back to char-based errors
         errs.into_iter()
             .map(|e| Simple::expected_input_found(e.span(), vec![], e.found().cloned()))
             .collect()
-    })
+    });
+    println!("Parsed in {:?}", now.elapsed());
+    res
 }

@@ -87,8 +87,8 @@ impl Format for Comment<'_> {
 
 impl Format for Function<'_> {
     fn format(&self, fmt: &mut Formatter) {
-        self.definition.format(fmt);
-        self.body.as_ref().map(|body| body.format(fmt));
+        self.definition.0.format(fmt);
+        self.body.as_ref().map(|body| body.0.format(fmt));
         fmt.push_str("\n\n");
     }
 }
@@ -122,13 +122,13 @@ impl Format for Statement<'_> {
             Statement::Let(let_) => let_.format(fmt),
             Statement::Expression(expr) => {
                 fmt.push_str_indented("");
-                expr.format(fmt);
+                expr.0.format(fmt);
                 fmt.push_str(";\n");
             }
             Statement::Return(expr) => {
                 fmt.push_str_indented("return ");
                 if let Some(expr) = expr {
-                    expr.format(fmt);
+                    expr.0.format(fmt);
                 }
                 fmt.push_str(";\n");
             }
@@ -145,7 +145,7 @@ impl Format for FunctionCall<'_> {
             if i > 0 {
                 fmt.push_str(", ");
             }
-            arg.format(fmt);
+            arg.0.format(fmt);
         }
         fmt.push_str(")");
     }
@@ -163,7 +163,7 @@ impl Format for Expression<'_> {
                 }
                 if let Some(return_value) = &block.return_value {
                     fmt.push_str_indented("");
-                    return_value.format(fmt);
+                    return_value.0.format(fmt);
                     fmt.push_str("\n");
                 }
                 fmt.unindent();
@@ -172,24 +172,25 @@ impl Format for Expression<'_> {
             Expression::Variable(var) => fmt.push_string(var.to_string()),
             Expression::Literal(lit) => fmt.push_string(lit.to_string()),
             Expression::String(str) => fmt.push_string(str.to_string()),
-            Expression::Op(lhs, op, rhs) => {
+            Expression::Op(op) => {
+                let (lhs, op, rhs) = (&op.lhs, &op.op, &op.rhs);
                 fmt.push_str("(");
-                lhs.format(fmt);
+                lhs.0.format(fmt);
                 fmt.push_str(" ");
                 fmt.push_string(op.to_string());
                 fmt.push_str(" ");
-                rhs.format(fmt);
+                rhs.0.format(fmt);
                 fmt.push_str(")");
             }
             Expression::UnaryOp(op, expr) => {
                 fmt.push_string(op.to_string());
                 fmt.push_str("(");
-                expr.format(fmt);
+                expr.0.format(fmt);
                 fmt.push_str(")");
             }
             Expression::If(if_) => if_.format(fmt),
             Expression::ExpressionComment((expr, comment)) => {
-                expr.format(fmt);
+                expr.0.format(fmt);
                 comment.format(fmt);
             }
             Expression::While(while_) => while_.format(fmt),
@@ -211,12 +212,12 @@ impl Display for Literal<'_> {
 impl Format for If<'_> {
     fn format(&self, fmt: &mut Formatter) {
         fmt.push_str("if ");
-        self.condition.format(fmt);
+        self.condition.0.format(fmt);
         fmt.push_str(" ");
-        self.body.format(fmt);
+        self.body.0.format(fmt);
         if let Some(else_) = &self.else_body {
             fmt.push_str(" else ");
-            else_.format(fmt);
+            else_.0.format(fmt);
         }
     }
 }
@@ -224,8 +225,8 @@ impl Format for If<'_> {
 impl Format for While<'_> {
     fn format(&self, fmt: &mut Formatter) {
         fmt.push_str("while ");
-        self.condition.format(fmt);
+        self.condition.0.format(fmt);
         fmt.push_str(" ");
-        self.body.format(fmt);
+        self.body.0.format(fmt);
     }
 }

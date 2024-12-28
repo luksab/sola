@@ -8,7 +8,12 @@ use inkwell::{
     values::{BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, PointerValue},
 };
 
-use crate::base_ast::{Expression, Function, FunctionDefinition, Program, Type};
+use crate::base_ast::{Expression, Function, FunctionDefinition, Program, Span, Spanned, Type};
+
+pub struct CompileError {
+    pub message: String,
+    pub span: Span,
+}
 
 pub struct Compiler<'a, 'ctx> {
     pub context: &'ctx Context,
@@ -77,7 +82,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         builder: &'a Builder<'ctx>,
         module: &'a Module<'ctx>,
         program: &'a Program<'ctx>,
-    ) -> Result<(), String> {
+    ) -> Result<(), CompileError> {
         // let context = Context::create();
         // let module = context.create_module("ret");
         // let builder = context.create_builder();
@@ -104,7 +109,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         compiler.compile_program(program)
     }
 
-    fn compile_program(&mut self, program: &Program<'ctx>) -> Result<(), String> {
+    fn compile_program(&mut self, program: &Program<'ctx>) -> Result<(), CompileError> {
         for thing in &program.things {
             match thing {
                 crate::base_ast::TopLevel::Function(function) => {
@@ -120,7 +125,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
     fn compile_function(
         &mut self,
         function: &Function<'ctx>,
-    ) -> Result<FunctionValue<'ctx>, String> {
+    ) -> Result<FunctionValue<'ctx>, CompileError> {
         let function_val = self.compile_fn_definition(&function.definition)?;
 
         // got external function, returning only compiled prototype
@@ -136,11 +141,11 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         self.fn_value_opt = Some(function_val);
 
         // build variables map
-        self.variables.reserve(function.definition.params.len());
+        self.variables.reserve(function.definition.0.params.len());
 
         for (i, arg) in function_val.get_param_iter().enumerate() {
-            let arg_name = function.definition.params[i].name;
-            let tipe = function.definition.params[i].tipe;
+            let arg_name = function.definition.0.params[i].name;
+            let tipe = function.definition.0.params[i].tipe;
             let alloca = self.create_entry_block_alloca(arg_name, tipe);
 
             self.builder.build_store(alloca, arg).unwrap();
@@ -149,7 +154,12 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         }
 
         // compile body
-        let body = self.compile_expr(function.body.as_ref().unwrap())?;
+        let body = self.compile_expr(
+            function
+                .body
+                .as_ref()
+                .expect("We should have returned earlier if this was None"),
+        )?;
 
         self.builder
             .build_return(body.as_ref().map(|b| b as &dyn BasicValue))
@@ -163,22 +173,29 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 function_val.delete();
             }
 
-            Err("Invalid generated function.".to_string())
+            Err(CompileError {
+                message: "Invalid generated function.".to_string(),
+                span: Span::default(), // Replace with the appropriate span
+            })
         }
     }
 
     fn compile_fn_definition(
         &self,
-        proto: &FunctionDefinition,
-    ) -> Result<FunctionValue<'ctx>, String> {
+        proto: &Spanned<FunctionDefinition>,
+    ) -> Result<FunctionValue<'ctx>, CompileError> {
+        let (proto, span) = (&proto.0, &proto.1);
         let args_types = proto
             .params
             .iter()
             .map(|f| match f.tipe {
-                crate::base_ast::Type::I32 => self.context.i32_type().into(),
-                _ => unimplemented!(),
+                crate::base_ast::Type::I32 => Ok(self.context.i32_type().into()),
+                _ => Err(CompileError {
+                    message: "Unsupported argument type.".to_string(),
+                    span: span.clone(),
+                }),
             })
-            .collect::<Vec<BasicMetadataTypeEnum>>();
+            .collect::<Result<Vec<BasicMetadataTypeEnum>, CompileError>>()?;
         let args_types = args_types.as_slice();
 
         let fn_type = match proto.return_type {
@@ -217,9 +234,9 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 
     fn compile_expr(
         &mut self,
-        expression: &Expression<'ctx>,
-    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-        match expression {
+        expression: &Spanned<Expression<'ctx>>,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, CompileError> {
+        match &expression.0 {
             Expression::Block(block) => {
                 for (i, statement) in block.statements.iter().enumerate() {
                     match statement {
@@ -232,8 +249,11 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                                 self.variables
                                     .insert(let_.name.to_string(), (alloca, let_.tipe));
                             } else {
-                                return Err("Error compiling let statement. Expression is None."
-                                    .to_string());
+                                return Err(CompileError {
+                                    message: "Error compiling let statement. Expression is None."
+                                        .to_string(),
+                                    span: expression.1.clone(),
+                                });
                             }
                         }
                         crate::base_ast::Statement::Expression(expr) => {
@@ -249,7 +269,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                                 eprintln!("Warning: Unreachable code after return statement.");
                             }
                             if let Some(return_value) = expr {
-                                return Ok(self.compile_expr(return_value)?);
+                                return Ok(self.compile_expr(&return_value)?);
                             } else {
                                 return Ok(None);
                             }
@@ -292,12 +312,18 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                             None => Ok(None),
                         }
                     }
-                    None => Err("Unknown function.".to_string()),
+                    None => Err(CompileError {
+                        message: "Unknown function.".to_string(),
+                        span: expression.1.clone(),
+                    }),
                 }
             }
             Expression::Variable(variable) => match self.variables.get(variable.name) {
                 Some(var) => Ok(Some(self.build_load(var.0, variable.name, var.1))),
-                None => Err(format!("Undefined variable: {}", variable.name)),
+                None => Err(CompileError {
+                    message: format!("Undefined variable: {}", variable.name),
+                    span: expression.1.clone(),
+                }),
             },
             Expression::Literal(lit) => {
                 use crate::base_ast::Literal::*;
@@ -440,7 +466,8 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 
                 Ok(None)
             }
-            Expression::Op(left, opcode, right) => {
+            Expression::Op(op) => {
+                let (left, opcode, right) = (&op.lhs, &op.op, &op.rhs);
                 let lhs = self
                     .compile_expr(left)?
                     .expect("Left side of binary operation must return a value.");
@@ -503,18 +530,22 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                             ))),
                             Assign => {
                                 // handle assignment
-                                let sola_var = match *left.borrow() {
+                                let sola_var = match *left.0.borrow() {
                                     Expression::Variable(ref var_name) => var_name,
-                                    _ => {
-                                        return Err("Expected variable as left-hand operator of assignment.".to_string());
-                                    }
+                                    _ => return Err(CompileError {
+                                        message:
+                                            "Expected variable as left-hand operator of assignment."
+                                                .to_string(),
+                                        span: left.1.clone(),
+                                    }),
                                 };
 
                                 let var_val = self.compile_expr(right)?;
-                                let var = self
-                                    .variables
-                                    .get(sola_var.name)
-                                    .ok_or("Undefined variable.")?;
+                                let var =
+                                    self.variables.get(sola_var.name).ok_or(CompileError {
+                                        message: format!("Undefined variable: {}", sola_var.name),
+                                        span: sola_var.span.clone(),
+                                    })?;
 
                                 self.builder
                                     .build_store(
@@ -556,7 +587,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
             }
             Expression::UnaryOp(opcode, expr) => {
                 let expr = self
-                    .compile_expr(expr)?
+                    .compile_expr(&expr)?
                     .expect("Unary operation must return a value.");
 
                 use crate::base_ast::Opcode::*;

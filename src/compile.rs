@@ -6,7 +6,10 @@ use inkwell::{
     OptimizationLevel,
 };
 
-use crate::{base_ast::Program, compiler::Compiler};
+use crate::{
+    base_ast::Program,
+    compiler::{CompileError, Compiler},
+};
 
 fn run_passes_on(module: &Module, level: OptimizationLevel) {
     Target::initialize_all(&InitializationConfig::default());
@@ -53,16 +56,23 @@ fn run_passes_on(module: &Module, level: OptimizationLevel) {
         .unwrap();
 }
 
-pub fn compile(program: &Program, level: OptimizationLevel) {
+pub fn compile(
+    program: &Program,
+    level: OptimizationLevel,
+    print_ir: bool,
+) -> Result<(), CompileError> {
     let context = Context::create();
     let builder = context.create_builder();
     let module = context.create_module("tmp");
-    Compiler::compile(&context, &builder, &module, program).unwrap();
-    println!("compiled");
+    let now = std::time::SystemTime::now();
+    Compiler::compile(&context, &builder, &module, program)?;
+    println!("compiled in {:?}", now.elapsed().unwrap());
 
     run_passes_on(&module, level);
 
-    module.print_to_stderr();
+    if print_ir {
+        module.print_to_stderr();
+    }
 
     // compile to object file
     let target_triple = TargetMachine::get_default_triple();
@@ -105,4 +115,6 @@ pub fn compile(program: &Program, level: OptimizationLevel) {
         linker_command.arg("-O3");
     }
     linker_command.status().expect("Failed to execute process");
+
+    Ok(())
 }

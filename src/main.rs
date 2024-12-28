@@ -15,8 +15,12 @@ struct Opt {
     input: std::path::PathBuf,
 
     /// Print the AST
+    #[structopt(long)]
+    print_ast: bool,
+
+    /// Print the LLVM IR
     #[structopt(short, long)]
-    ast: bool,
+    print_ir: bool,
 
     /// Optimization level
     /// 0: No optimization
@@ -30,18 +34,14 @@ struct Opt {
 fn main() {
     let opt: Opt = Opt::from_args();
     let input = std::fs::read_to_string(&opt.input).unwrap();
-    println!("{}", input);
+    // println!("{}", input);
     let program = parse_program(&input);
-    println!("{:?}", program);
     if let Err(err) = program {
-        use ariadne::{Color, ColorGenerator, Fmt, Label, Report, ReportKind, Source};
+        use ariadne::{ColorGenerator, Label, Report, ReportKind, Source};
 
         let mut colors = ColorGenerator::new();
 
-        // Generate & choose some colours for each of our elements
         let a = colors.next();
-        let b = colors.next();
-        let out = Color::Fixed(81);
 
         for err in err {
             let input_path = opt.input.to_str();
@@ -72,11 +72,11 @@ fn main() {
     }
     let program = program.unwrap();
 
-    if opt.ast {
+    if opt.print_ast {
         println!("{:#?}", program);
-    } else {
-        print!("{}", formatter::format(&program));
     }
+
+    // print!("{}", formatter::format(&program));
 
     let level = match opt.optimization {
         0 => OptimizationLevel::None,
@@ -86,5 +86,27 @@ fn main() {
         _ => panic!("Invalid optimization level"),
     };
 
-    compile::compile(&program, level);
+    if let Err(err) = compile::compile(&program, level, opt.print_ir) {
+        use ariadne::{ColorGenerator, Label, Report, ReportKind, Source};
+
+        let mut colors = ColorGenerator::new();
+
+        // Generate & choose some colours for each of our elements
+        let a = colors.next();
+        // let b = colors.next();
+        // let out = Color::Fixed(81);
+
+        let input_path = opt.input.to_str();
+        Report::build(ReportKind::Error, (input_path.unwrap(), err.span.clone()))
+            .with_label(
+                Label::new((input_path.unwrap(), err.span))
+                    .with_message(err.message)
+                    .with_color(a),
+            )
+            .finish()
+            .print((input_path.unwrap(), Source::from(&input)))
+            .unwrap();
+
+        std::process::exit(1);
+    }
 }

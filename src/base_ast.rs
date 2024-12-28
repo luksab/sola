@@ -2,6 +2,7 @@ use colored::Colorize;
 use std::{
     fmt::{Debug, Display, Error},
     num::ParseIntError,
+    ops::Range,
 };
 
 use crate::formatter::{Format, Formatter};
@@ -19,6 +20,8 @@ impl Display for SolaParseError {
         }
     }
 }
+
+pub type Spanned<T> = (T, Range<usize>);
 
 #[derive(Debug)]
 pub struct Program<'input> {
@@ -48,10 +51,13 @@ impl<'input> Comment<'input> {
 
 // function -------------------------------------------------------------------
 
+pub type Span = Range<usize>;
+
 #[derive(Debug)]
 pub struct Function<'input> {
-    pub definition: FunctionDefinition<'input>,
-    pub body: Option<Box<Expression<'input>>>,
+    pub definition: Spanned<FunctionDefinition<'input>>,
+    pub body: Option<Box<Spanned<Expression<'input>>>>,
+    pub span: Span,
 }
 
 #[derive(Debug)]
@@ -65,6 +71,7 @@ pub struct FunctionDefinition<'input> {
 pub struct Parameter<'input> {
     pub name: &'input str,
     pub tipe: Type<'input>,
+    pub span: Span,
 }
 
 impl Display for Parameter<'_> {
@@ -78,8 +85,8 @@ impl Display for Parameter<'_> {
 #[derive(Debug)]
 pub enum Statement<'input> {
     Let(Let<'input>),
-    Expression(Box<Expression<'input>>),
-    Return(Option<Box<Expression<'input>>>),
+    Expression(Box<Spanned<Expression<'input>>>),
+    Return(Option<Box<Spanned<Expression<'input>>>>),
     Comment(Comment<'input>),
     Error,
 }
@@ -88,7 +95,7 @@ pub enum Statement<'input> {
 pub struct Let<'input> {
     pub name: &'input str,
     pub tipe: Type<'input>,
-    pub value: Box<Expression<'input>>,
+    pub value: Spanned<Expression<'input>>,
 }
 
 impl Format for Let<'_> {
@@ -96,7 +103,7 @@ impl Format for Let<'_> {
         fmt.push_str_indented("let ");
         fmt.push_str(self.name);
         fmt.push_str(" = ");
-        self.value.format(fmt);
+        self.value.0.format(fmt);
         fmt.push_str(";\n");
     }
 }
@@ -104,13 +111,13 @@ impl Format for Let<'_> {
 #[derive(Debug)]
 pub struct FunctionCall<'input> {
     pub name: &'input str,
-    pub args: Vec<Box<Expression<'input>>>,
+    pub args: Vec<Spanned<Expression<'input>>>,
 }
 
 #[derive(Debug)]
 pub struct While<'input> {
-    pub condition: Box<Expression<'input>>,
-    pub body: Box<Expression<'input>>,
+    pub condition: Box<Spanned<Expression<'input>>>,
+    pub body: Box<Spanned<Expression<'input>>>,
 }
 
 // expressions ----------------------------------------------------------------
@@ -124,10 +131,18 @@ pub enum Expression<'input> {
     Literal(Literal<'input>),
     String(ASTString<'input>),
     If(If<'input>),
-    Op(Box<Expression<'input>>, Opcode, Box<Expression<'input>>),
-    UnaryOp(Opcode, Box<Expression<'input>>),
-    ExpressionComment((Box<Expression<'input>>, Comment<'input>)),
+    Op(Op<'input>),
+    UnaryOp(Opcode, Box<Spanned<Expression<'input>>>),
+    ExpressionComment((Box<Spanned<Expression<'input>>>, Comment<'input>)),
     Error,
+}
+
+#[derive(Debug)]
+pub struct Op<'input> {
+    pub lhs: Box<Spanned<Expression<'input>>>,
+    pub op: Opcode,
+    pub rhs: Box<Spanned<Expression<'input>>>,
+    // pub span: Range<usize>,
 }
 
 #[derive(Debug)]
@@ -140,12 +155,13 @@ pub enum Literal<'input> {
 #[derive(Debug)]
 pub struct Block<'input> {
     pub statements: Vec<Statement<'input>>,
-    pub return_value: Option<Box<Expression<'input>>>,
+    pub return_value: Option<Box<Spanned<Expression<'input>>>>,
 }
 
 #[derive(Debug)]
 pub struct Variable<'input> {
     pub name: &'input str,
+    pub span: Span,
 }
 
 impl Display for Variable<'_> {
@@ -167,9 +183,9 @@ impl<'input> Display for ASTString<'input> {
 
 #[derive(Debug)]
 pub struct If<'input> {
-    pub condition: Box<Expression<'input>>,
-    pub body: Box<Expression<'input>>,
-    pub else_body: Option<Box<Expression<'input>>>,
+    pub condition: Box<Spanned<Expression<'input>>>,
+    pub body: Box<Spanned<Expression<'input>>>,
+    pub else_body: Option<Box<Spanned<Expression<'input>>>>,
 }
 
 // types ----------------------------------------------------------------------
