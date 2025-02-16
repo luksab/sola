@@ -171,7 +171,6 @@ impl Format for Expression<'_> {
             }
             Expression::Variable(var) => fmt.push_string(var.to_string()),
             Expression::Literal(lit) => fmt.push_string(lit.to_string()),
-            Expression::String(str) => fmt.push_string(str.to_string()),
             Expression::Op(op) => {
                 let (lhs, op, rhs) = (&op.lhs, &op.op, &op.rhs);
                 fmt.push_str("(");
@@ -202,7 +201,10 @@ impl Format for Expression<'_> {
 impl Display for Literal<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Literal::Integer(num) => write!(f, "{}", num),
+            Literal::Integer(num, None) => write!(f, "{}", num),
+            Literal::Integer(num, Some(type_)) => write!(f, "{num}{type_}",),
+            Literal::Float(num, None) => write!(f, "{}", num),
+            Literal::Float(num, Some(type_)) => write!(f, "{num}{type_}",),
             Literal::Bool(b) => write!(f, "{}", b),
             Literal::String(s) => write!(f, "\"{}\"", s),
         }

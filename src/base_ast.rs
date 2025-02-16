@@ -5,7 +5,7 @@ use std::{
     ops::Range,
 };
 
-use crate::formatter::{Format, Formatter};
+use crate::{formatter::{Format, Formatter}, resolver::{FloatType, IntegerType}};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SolaParseError {
@@ -129,7 +129,6 @@ pub enum Expression<'input> {
     FunctionCall(FunctionCall<'input>),
     Variable(Variable<'input>),
     Literal(Literal<'input>),
-    String(ASTString<'input>),
     If(If<'input>),
     Op(Op<'input>),
     UnaryOp(Opcode, Box<Spanned<Expression<'input>>>),
@@ -147,8 +146,9 @@ pub struct Op<'input> {
 
 #[derive(Debug)]
 pub enum Literal<'input> {
-    Integer(i32),
+    Integer(i128, Option<IntegerType>),
     Bool(bool),
+    Float(f64, Option<FloatType>),
     String(&'input str),
 }
 
@@ -191,8 +191,19 @@ pub struct If<'input> {
 // types ----------------------------------------------------------------------
 #[derive(Debug, Clone, Copy)]
 pub enum Type<'input> {
+    I8,
+    U8,
+    I16,
+    U16,
     I32,
+    U32,
+    I64,
+    U64,
+    I128,
+    U128,
     Bool,
+    F32,
+    F64,
     Custom(&'input str),
 }
 
@@ -200,8 +211,19 @@ impl Display for Type<'_> {
     fn fmt(&self, fmt: &mut std::fmt::Formatter) -> Result<(), Error> {
         use self::Type::*;
         match *self {
+            I8 => write!(fmt, "i8"),
+            U8 => write!(fmt, "u8"),
+            I16 => write!(fmt, "i16"),
+            U16 => write!(fmt, "u16"),
             I32 => write!(fmt, "i32"),
+            U32 => write!(fmt, "u32"),
+            I64 => write!(fmt, "i64"),
+            U64 => write!(fmt, "u64"),
+            I128 => write!(fmt, "i128"),
+            U128 => write!(fmt, "u128"),
             Bool => write!(fmt, "bool"),
+            F32 => write!(fmt, "f32"),
+            F64 => write!(fmt, "f64"),
             Custom(name) => write!(fmt, "{}", name),
         }
     }

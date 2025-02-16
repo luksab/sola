@@ -7,8 +7,8 @@ use inkwell::{
 };
 
 use crate::{
-    base_ast::Program,
     compiler::{CompileError, Compiler},
+    resolver::Program,
 };
 
 fn run_passes_on(module: &Module, level: OptimizationLevel) {
@@ -27,7 +27,10 @@ fn run_passes_on(module: &Module, level: OptimizationLevel) {
         .unwrap();
 
     let passes: &[&str] = match level {
-        OptimizationLevel::None | OptimizationLevel::Less | OptimizationLevel::Default => &[
+        OptimizationLevel::None => &[
+            "instcount",
+        ],
+        OptimizationLevel::Less | OptimizationLevel::Default => &[
             "instcombine",
             "reassociate",
             "gvn",

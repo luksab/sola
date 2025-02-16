@@ -1,0 +1,11 @@
+- [x] track spans
+- [ ] parser error recovery (brace matching)
+- [x] track types (i64, i32, u64, etc.)
+- [ ] pointer types
+- [ ] array/struct/enums
+- [ ] match expressions
+- [ ] standard library functions
+- [ ] resolver step
+- [ ] add conversion functions
+- [ ] heap allocation
+- [ ] GC

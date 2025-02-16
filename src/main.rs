@@ -3,6 +3,7 @@ pub mod compile;
 pub mod compiler;
 pub mod formatter;
 pub mod parser;
+pub mod resolver;
 
 use inkwell::OptimizationLevel;
 use parser::parse_program;
@@ -36,45 +37,19 @@ fn main() {
     let input = std::fs::read_to_string(&opt.input).unwrap();
     // println!("{}", input);
     let program = parse_program(&input);
-    if let Err(err) = program {
-        use ariadne::{ColorGenerator, Label, Report, ReportKind, Source};
-
-        let mut colors = ColorGenerator::new();
-
-        let a = colors.next();
-
-        for err in err {
-            let input_path = opt.input.to_str();
-            match err.reason() {
-                chumsky::error::SimpleReason::Unexpected => {
-                    Report::build(ReportKind::Error, (input_path.unwrap(), err.span()))
-                        .with_label(
-                            Label::new((input_path.unwrap(), err.span()))
-                                .with_message(format!(
-                                    "Unexpected token: \"{:?}\"",
-                                    err.found().unwrap()
-                                ))
-                                .with_color(a),
-                        )
-                        .with_message(format!(
-                            "Expected one of: {:?}",
-                            err.expected().collect::<Vec<_>>()
-                        ))
-                        .finish()
-                        .print((input_path.unwrap(), Source::from(&input)))
-                        .unwrap()
-                }
-                chumsky::error::SimpleReason::Unclosed { span, delimiter } => todo!(),
-                chumsky::error::SimpleReason::Custom(_) => todo!(),
-            }
+    let program: base_ast::Program<'_> = match program {
+        Err(err) => {
+            report_parse_errors(&opt, &input, err);
+            std::process::exit(1);
         }
-        std::process::exit(1);
-    }
-    let program = program.unwrap();
+        Ok(program) => program,
+    };
 
     if opt.print_ast {
         println!("{:#?}", program);
     }
+
+    let program = resolver::resolve(&program);
 
     // print!("{}", formatter::format(&program));
 
@@ -108,5 +83,43 @@ fn main() {
             .unwrap();
 
         std::process::exit(1);
+    }
+}
+
+fn report_parse_errors(
+    opt: &Opt,
+    input: &String,
+    err: Vec<chumsky::prelude::Simple<parser::Token<'_>>>,
+) {
+    use ariadne::{ColorGenerator, Label, Report, ReportKind, Source};
+    let mut colors = ColorGenerator::new();
+    let a = colors.next();
+    for err in err {
+        let input_path = opt.input.to_str();
+        match err.reason() {
+            chumsky::error::SimpleReason::Unexpected => {
+                Report::build(ReportKind::Error, (input_path.unwrap(), err.span()))
+                    .with_label(
+                        Label::new((input_path.unwrap(), err.span()))
+                            .with_message(format!(
+                                "Unexpected token: \"{:?}\"",
+                                err.found().unwrap()
+                            ))
+                            .with_color(a),
+                    )
+                    .with_message(format!(
+                        "Expected one of: {:?}",
+                        err.expected().collect::<Vec<_>>()
+                    ))
+                    .finish()
+                    .print((input_path.unwrap(), Source::from(input)))
+                    .unwrap()
+            }
+            chumsky::error::SimpleReason::Unclosed {
+                span: _,
+                delimiter: _,
+            } => todo!(),
+            chumsky::error::SimpleReason::Custom(_) => todo!(),
+        }
     }
 }

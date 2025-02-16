@@ -51,10 +51,32 @@ pub enum Token<'input> {
     Return,
     #[regex(r"true|false")]
     BoolLiteral(&'input str),
+    #[token("i8")]
+    TypeI8,
+    #[token("u8")]
+    TypeU8,
+    #[token("i16")]
+    TypeI16,
+    #[token("u16")]
+    TypeU16,
     #[token("i32")]
     TypeI32,
+    #[token("u32")]
+    TypeU32,
+    #[token("i64")]
+    TypeI64,
+    #[token("u64")]
+    TypeU64,
+    #[token("i128")]
+    TypeI128,
+    #[token("u128")]
+    TypeU128,
     #[token("bool")]
     TypeBool,
+    #[token("f32")]
+    TypeF32,
+    #[token("f64")]
+    TypeF64,
 
     // Symbols
     #[token("(")]
@@ -188,8 +210,19 @@ fn parameter_parser<'input>(
 fn type_parser<'input>() -> impl Parser<Token<'input>, Type<'input>, Error = Simple<Token<'input>>>
 {
     choice((
-        just(Token::TypeI32).to(Type::I32),
-        just(Token::TypeBool).to(Type::Bool),
+        just(Token::TypeI8).map(|_| Type::I8),
+        just(Token::TypeU8).map(|_| Type::U8),
+        just(Token::TypeI16).map(|_| Type::I16),
+        just(Token::TypeU16).map(|_| Type::U16),
+        just(Token::TypeI32).map(|_| Type::I32),
+        just(Token::TypeU32).map(|_| Type::U32),
+        just(Token::TypeI64).map(|_| Type::I64),
+        just(Token::TypeU64).map(|_| Type::U64),
+        just(Token::TypeI128).map(|_| Type::I128),
+        just(Token::TypeU128).map(|_| Type::U128),
+        just(Token::TypeBool).map(|_| Type::Bool),
+        just(Token::TypeF32).map(|_| Type::F32),
+        just(Token::TypeF64).map(|_| Type::F64),
     ))
 }
 
@@ -301,7 +334,11 @@ fn expression_parser<'input>(
                 choice((
                     filter_map(|span, token| match token {
                         Token::Integer(n) => {
-                            Ok(Expression::Literal(Literal::Integer(n.parse().unwrap())))
+                            // TODO: Parse types in integer literals
+                            Ok(Expression::Literal(Literal::Integer(
+                                n.parse().unwrap(),
+                                None,
+                            )))
                         }
                         Token::BoolLiteral(b) => {
                             Ok(Expression::Literal(Literal::Bool(b == "true")))
@@ -309,7 +346,7 @@ fn expression_parser<'input>(
                         _ => Err(Simple::expected_input_found(span, vec![], Some(token))),
                     }),
                     filter_map(|span, token| match token {
-                        Token::StrLit(s) => Ok(Expression::String(ASTString { value: s })),
+                        Token::StrLit(s) => Ok(Expression::Literal(Literal::String(s))),
                         _ => Err(Simple::expected_input_found(span, vec![], Some(token))),
                     }),
                 ))

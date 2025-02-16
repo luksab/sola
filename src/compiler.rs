@@ -1,4 +1,4 @@
-use std::{borrow::Borrow, collections::HashMap};
+use std::collections::HashMap;
 
 use inkwell::{
     builder::Builder,
@@ -7,8 +7,13 @@ use inkwell::{
     types::BasicMetadataTypeEnum,
     values::{BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, PointerValue},
 };
+use ustr::Ustr;
 
-use crate::base_ast::{Expression, Function, FunctionDefinition, Program, Span, Spanned, Type};
+use crate::resolver::{
+    self, Expression, FloatType, Function, FunctionDefinition, InnerExpression, Program, Resolver,
+    Statement, TopLevel, Type,
+};
+use crate::{base_ast::Span, resolver::IntegerType};
 
 pub struct CompileError {
     pub message: String,
@@ -20,7 +25,9 @@ pub struct Compiler<'a, 'ctx> {
     pub builder: &'a Builder<'ctx>,
     pub module: &'a Module<'ctx>,
 
-    variables: HashMap<String, (PointerValue<'ctx>, Type<'ctx>)>,
+    resolver: &'a Resolver,
+
+    variables: HashMap<Ustr, (PointerValue<'ctx>, Type)>,
     fn_value_opt: Option<FunctionValue<'ctx>>,
 }
 
@@ -38,7 +45,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
     }
 
     /// Creates a new stack allocation instruction in the entry block of the function.
-    fn create_entry_block_alloca(&self, name: &str, tipe: Type) -> PointerValue<'ctx> {
+    fn create_entry_block_alloca(&self, name: &str, tipe: &Type) -> PointerValue<'ctx> {
         let builder = self.context.create_builder();
 
         let entry = self.fn_value().get_first_basic_block().unwrap();
@@ -49,7 +56,27 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         }
 
         match tipe {
-            Type::I32 => builder.build_alloca(self.context.i32_type(), name).unwrap(),
+            Type::Int(IntegerType::I8 | IntegerType::U8) => {
+                builder.build_alloca(self.context.i8_type(), name).unwrap()
+            }
+            Type::Int(IntegerType::I16 | IntegerType::U16) => {
+                builder.build_alloca(self.context.i16_type(), name).unwrap()
+            }
+            Type::Int(IntegerType::I32 | IntegerType::U32) => {
+                builder.build_alloca(self.context.i32_type(), name).unwrap()
+            }
+            Type::Int(IntegerType::I64 | IntegerType::U64) => {
+                builder.build_alloca(self.context.i64_type(), name).unwrap()
+            }
+            Type::Int(IntegerType::I128 | IntegerType::U128) => builder
+                .build_alloca(self.context.i128_type(), name)
+                .unwrap(),
+            Type::Float(FloatType::F32) => {
+                builder.build_alloca(self.context.f32_type(), name).unwrap()
+            }
+            Type::Float(FloatType::F64) => {
+                builder.build_alloca(self.context.f64_type(), name).unwrap()
+            }
             Type::Bool => builder
                 .build_alloca(self.context.bool_type(), name)
                 .unwrap(),
@@ -64,9 +91,33 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         tipe: Type,
     ) -> BasicValueEnum<'ctx> {
         match tipe {
-            Type::I32 => self
+            Type::Int(IntegerType::I8 | IntegerType::U8) => self
+                .builder
+                .build_load(self.context.i8_type(), ptr, name)
+                .unwrap(),
+            Type::Int(IntegerType::I16 | IntegerType::U16) => self
+                .builder
+                .build_load(self.context.i16_type(), ptr, name)
+                .unwrap(),
+            Type::Int(IntegerType::I32 | IntegerType::U32) => self
                 .builder
                 .build_load(self.context.i32_type(), ptr, name)
+                .unwrap(),
+            Type::Int(IntegerType::I64 | IntegerType::U64) => self
+                .builder
+                .build_load(self.context.i64_type(), ptr, name)
+                .unwrap(),
+            Type::Int(IntegerType::I128 | IntegerType::U128) => self
+                .builder
+                .build_load(self.context.i128_type(), ptr, name)
+                .unwrap(),
+            Type::Float(FloatType::F32) => self
+                .builder
+                .build_load(self.context.f32_type(), ptr, name)
+                .unwrap(),
+            Type::Float(FloatType::F64) => self
+                .builder
+                .build_load(self.context.f64_type(), ptr, name)
                 .unwrap(),
             Type::Bool => self
                 .builder
@@ -81,7 +132,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         context: &'ctx Context,
         builder: &'a Builder<'ctx>,
         module: &'a Module<'ctx>,
-        program: &'a Program<'ctx>,
+        program: &'a Program,
     ) -> Result<(), CompileError> {
         // let context = Context::create();
         // let module = context.create_module("ret");
@@ -98,10 +149,12 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 
         // println!("{}", module.print_to_string().to_string());
         // return Err("Not implemented".to_string())
+        let resolver = &program.resolver;
         let mut compiler = Compiler {
             context,
             builder,
             module,
+            resolver,
             fn_value_opt: None,
             variables: HashMap::new(),
         };
@@ -109,13 +162,13 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         compiler.compile_program(program)
     }
 
-    fn compile_program(&mut self, program: &Program<'ctx>) -> Result<(), CompileError> {
+    fn compile_program(&mut self, program: &Program) -> Result<(), CompileError> {
         for thing in &program.things {
             match thing {
-                crate::base_ast::TopLevel::Function(function) => {
+                TopLevel::Function(function) => {
+                    let function = &self.resolver.all_functions[function];
                     self.compile_function(function)?;
                 }
-                crate::base_ast::TopLevel::Comment(_comment) => (),
             }
         }
 
@@ -124,7 +177,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 
     fn compile_function(
         &mut self,
-        function: &Function<'ctx>,
+        function: &Function,
     ) -> Result<FunctionValue<'ctx>, CompileError> {
         let function_val = self.compile_fn_definition(&function.definition)?;
 
@@ -141,25 +194,66 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         self.fn_value_opt = Some(function_val);
 
         // build variables map
-        self.variables.reserve(function.definition.0.params.len());
+        self.variables.reserve(function.definition.params.len());
 
         for (i, arg) in function_val.get_param_iter().enumerate() {
-            let arg_name = function.definition.0.params[i].name;
-            let tipe = function.definition.0.params[i].tipe;
-            let alloca = self.create_entry_block_alloca(arg_name, tipe);
+            let resolved_variable = &self.resolver.all_variables[function.definition.params[i]];
+            let arg_name = resolved_variable.name;
+            let alloca = self.create_entry_block_alloca(&arg_name, &resolved_variable.type_);
 
             self.builder.build_store(alloca, arg).unwrap();
 
-            self.variables.insert(arg_name.to_string(), (alloca, tipe));
+            self.variables
+                .insert(arg_name, (alloca, resolved_variable.type_.clone()));
         }
 
+        // // check that the return type of the body is the same as the function definition
+        // if &function.definition.return_type != &function.body.as_ref().unwrap().return_type {
+        //     return Err(CompileError {
+        //         message: format!(
+        //             "Return type of function body({:?}) does not match function definition({:?}).",
+        //             function.body.as_ref().unwrap().return_type,
+        //             function.definition.return_type
+        //         ),
+        //         span: function.span.clone(),
+        //     });
+        // }
+
         // compile body
-        let body = self.compile_expr(
+        let mut body = self.compile_expr(
             function
                 .body
                 .as_ref()
                 .expect("We should have returned earlier if this was None"),
         )?;
+
+        // if the body returns something and the function definition has a return type, cast the return value
+        if let Some(body) = &mut body {
+            if let Some(return_type) = &function.definition.return_type {
+                // check, that the type of the body can be casted to the return type
+                let body_type = function
+                    .body
+                    .as_ref()
+                    .unwrap()
+                    .return_type
+                    .as_ref()
+                    .unwrap();
+                if body_type < return_type {
+                    *body = self.cast_value_to_type(body.clone(), return_type);
+                } else if body_type == return_type {
+                    // do nothing, because the types are already the same
+                } else {
+                    return Err(CompileError {
+                        message: format!(
+                            "Return type of function body ({:?}) cannot be casted to function definition ({:?}).",
+                            body_type,
+                            return_type
+                        ),
+                        span: function.span.clone(),
+                    });
+                }
+            }
+        }
 
         self.builder
             .build_return(body.as_ref().map(|b| b as &dyn BasicValue))
@@ -169,61 +263,99 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         if function_val.verify(true) {
             Ok(function_val)
         } else {
+            // println to stderr to add a newline after the error message from LLVM
+            eprintln!();
             unsafe {
                 function_val.delete();
             }
 
             Err(CompileError {
                 message: "Invalid generated function.".to_string(),
-                span: Span::default(), // Replace with the appropriate span
+                span: function.span.clone(), // Replace with the appropriate span
             })
         }
     }
 
     fn compile_fn_definition(
         &self,
-        proto: &Spanned<FunctionDefinition>,
+        proto: &FunctionDefinition,
     ) -> Result<FunctionValue<'ctx>, CompileError> {
-        let (proto, span) = (&proto.0, &proto.1);
         let args_types = proto
             .params
             .iter()
-            .map(|f| match f.tipe {
-                crate::base_ast::Type::I32 => Ok(self.context.i32_type().into()),
-                _ => Err(CompileError {
-                    message: "Unsupported argument type.".to_string(),
-                    span: span.clone(),
-                }),
+            .map(|f| {
+                let resolved_variable = &self.resolver.all_variables[f];
+                match resolved_variable.type_ {
+                    resolver::Type::Int(IntegerType::I8 | IntegerType::U8) => {
+                        Ok(self.context.i8_type().into())
+                    }
+                    resolver::Type::Int(IntegerType::I16 | IntegerType::U16) => {
+                        Ok(self.context.i16_type().into())
+                    }
+                    resolver::Type::Int(IntegerType::I32 | IntegerType::U32) => {
+                        Ok(self.context.i32_type().into())
+                    }
+                    resolver::Type::Int(IntegerType::I64 | IntegerType::U64) => {
+                        Ok(self.context.i64_type().into())
+                    }
+                    resolver::Type::Int(IntegerType::I128 | IntegerType::U128) => {
+                        Ok(self.context.i128_type().into())
+                    }
+                    resolver::Type::Float(FloatType::F32) => Ok(self.context.f32_type().into()),
+                    resolver::Type::Float(FloatType::F64) => Ok(self.context.f64_type().into()),
+                    resolver::Type::Bool => Ok(self.context.bool_type().into()),
+                    _ => Err(CompileError {
+                        message: "Unsupported argument type.".to_string(),
+                        span: resolved_variable.span.clone(),
+                    }),
+                }
             })
             .collect::<Result<Vec<BasicMetadataTypeEnum>, CompileError>>()?;
         let args_types = args_types.as_slice();
 
         let fn_type = match proto.return_type {
-            Some(Type::I32) => self.context.i32_type().fn_type(args_types, false),
+            Some(Type::Int(IntegerType::I8) | Type::Int(IntegerType::U8)) => {
+                self.context.i8_type().fn_type(args_types, false)
+            }
+            Some(Type::Int(IntegerType::I16) | Type::Int(IntegerType::U16)) => {
+                self.context.i16_type().fn_type(args_types, false)
+            }
+            Some(Type::Int(IntegerType::I32) | Type::Int(IntegerType::U32)) => {
+                self.context.i32_type().fn_type(args_types, false)
+            }
+            Some(Type::Int(IntegerType::I64) | Type::Int(IntegerType::U64)) => {
+                self.context.i64_type().fn_type(args_types, false)
+            }
+            Some(Type::Int(IntegerType::I128) | Type::Int(IntegerType::U128)) => {
+                self.context.i128_type().fn_type(args_types, false)
+            }
+            Some(Type::Float(FloatType::F32)) => self.context.f32_type().fn_type(args_types, false),
+            Some(Type::Float(FloatType::F64)) => self.context.f64_type().fn_type(args_types, false),
             Some(Type::Bool) => self.context.bool_type().fn_type(args_types, false),
             None => self.context.void_type().fn_type(args_types, false),
             Some(_) => todo!(),
         };
-        let fn_val = self.module.add_function(proto.name, fn_type, None);
+        let fn_val = self.module.add_function(&proto.name, fn_type, None);
 
         // set arguments names
         for (i, arg) in fn_val.get_param_iter().enumerate() {
+            let resolved_variable = &self.resolver.all_variables[&proto.params[i]];
             match arg {
-                BasicValueEnum::IntValue(int_value) => int_value.set_name(proto.params[i].name),
+                BasicValueEnum::IntValue(int_value) => int_value.set_name(&resolved_variable.name),
                 BasicValueEnum::ArrayValue(array_value) => {
-                    array_value.set_name(proto.params[i].name)
+                    array_value.set_name(&resolved_variable.name)
                 }
                 BasicValueEnum::FloatValue(float_value) => {
-                    float_value.set_name(proto.params[i].name)
+                    float_value.set_name(&resolved_variable.name)
                 }
                 BasicValueEnum::PointerValue(pointer_value) => {
-                    pointer_value.set_name(proto.params[i].name)
+                    pointer_value.set_name(&resolved_variable.name)
                 }
                 BasicValueEnum::StructValue(struct_value) => {
-                    struct_value.set_name(proto.params[i].name)
+                    struct_value.set_name(&resolved_variable.name)
                 }
                 BasicValueEnum::VectorValue(vector_value) => {
-                    vector_value.set_name(proto.params[i].name)
+                    vector_value.set_name(&resolved_variable.name)
                 }
             }
         }
@@ -234,32 +366,32 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 
     fn compile_expr(
         &mut self,
-        expression: &Spanned<Expression<'ctx>>,
+        expression: &Expression,
     ) -> Result<Option<BasicValueEnum<'ctx>>, CompileError> {
-        match &expression.0 {
-            Expression::Block(block) => {
+        match &expression.expression {
+            InnerExpression::Block(block) => {
                 for (i, statement) in block.statements.iter().enumerate() {
                     match statement {
-                        crate::base_ast::Statement::Let(let_) => {
-                            let alloca = self.create_entry_block_alloca(let_.name, let_.tipe);
+                        Statement::Let(let_) => {
+                            let alloca = self.create_entry_block_alloca(&let_.name, &let_.type_);
                             let value = self.compile_expr(&let_.value)?;
 
                             if let Some(value) = value {
                                 self.builder.build_store(alloca, value).unwrap();
                                 self.variables
-                                    .insert(let_.name.to_string(), (alloca, let_.tipe));
+                                    .insert(let_.name, (alloca, let_.type_.clone()));
                             } else {
                                 return Err(CompileError {
                                     message: "Error compiling let statement. Expression is None."
                                         .to_string(),
-                                    span: expression.1.clone(),
+                                    span: expression.span.clone(),
                                 });
                             }
                         }
-                        crate::base_ast::Statement::Expression(expr) => {
+                        Statement::Expression(expr) => {
                             self.compile_expr(&expr)?;
                         }
-                        crate::base_ast::Statement::Return(expr) => {
+                        Statement::Return(expr) => {
                             // emit warning if there are more statements after return
                             if i < block.statements.len() - 1 {
                                 eprintln!("Warning: Unreachable code after return statement.");
@@ -274,8 +406,6 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                                 return Ok(None);
                             }
                         }
-                        crate::base_ast::Statement::Comment(_comment) => (),
-                        crate::base_ast::Statement::Error => todo!(),
                     }
                 }
 
@@ -285,8 +415,9 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     Ok(None)
                 }
             }
-            Expression::FunctionCall(function_call) => {
-                match self.get_function(function_call.name) {
+            InnerExpression::FunctionCall(function_call) => {
+                let function = &self.resolver.all_functions[function_call.function];
+                match self.get_function(&function.definition.name) {
                     Some(fun) => {
                         let args = &function_call.args;
                         let mut compiled_args = Vec::with_capacity(args.len());
@@ -314,31 +445,98 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     }
                     None => Err(CompileError {
                         message: "Unknown function.".to_string(),
-                        span: expression.1.clone(),
+                        span: expression.span.clone(),
                     }),
                 }
             }
-            Expression::Variable(variable) => match self.variables.get(variable.name) {
-                Some(var) => Ok(Some(self.build_load(var.0, variable.name, var.1))),
-                None => Err(CompileError {
-                    message: format!("Undefined variable: {}", variable.name),
-                    span: expression.1.clone(),
-                }),
-            },
-            Expression::Literal(lit) => {
-                use crate::base_ast::Literal::*;
-                match lit {
-                    Integer(num) => Ok(Some(BasicValueEnum::IntValue(
-                        self.context.i32_type().const_int(*num as u64, false),
-                    ))),
-                    Bool(b) => Ok(Some(BasicValueEnum::IntValue(
-                        self.context.bool_type().const_int(*b as u64, false),
-                    ))),
-                    String(_) => todo!(),
+            InnerExpression::Variable(variable_id) => {
+                let variable = &self.resolver.all_variables[variable_id];
+                match self.variables.get(&variable.name) {
+                    Some(var) => Ok(Some(self.build_load(var.0, &variable.name, var.1.clone()))),
+                    None => Err(CompileError {
+                        message: format!("Undefined variable: {}", variable.name),
+                        span: expression.span.clone(),
+                    }),
                 }
             }
-            Expression::String(aststring) => todo!(),
-            Expression::If(if_expr) => {
+            InnerExpression::Literal(lit) => {
+                use resolver::Literal::*;
+                match (lit, &expression.return_type) {
+                    // Integer(num) => Ok(Some(BasicValueEnum::IntValue(
+                    //     self.context.i32_type().const_int(*num as u64, false),
+                    // ))),
+                    // Float(num) => Ok(Some(BasicValueEnum::FloatValue(
+                    //     self.context.f64_type().const_float(*num),
+                    // ))),
+                    // Bool(b) => Ok(Some(BasicValueEnum::IntValue(
+                    //     self.context.bool_type().const_int(*b as u64, false),
+                    // ))),
+                    // String(_) => todo!(),
+                    (Integer(num), Some(Type::Int(IntegerType::I8))) => {
+                        Ok(Some(BasicValueEnum::IntValue(
+                            self.context.i8_type().const_int(*num as u64, false),
+                        )))
+                    }
+                    (Integer(num), Some(Type::Int(IntegerType::U8))) => {
+                        Ok(Some(BasicValueEnum::IntValue(
+                            self.context.i8_type().const_int(*num as u64, true),
+                        )))
+                    }
+                    (Integer(num), Some(Type::Int(IntegerType::I16))) => {
+                        Ok(Some(BasicValueEnum::IntValue(
+                            self.context.i16_type().const_int(*num as u64, false),
+                        )))
+                    }
+                    (Integer(num), Some(Type::Int(IntegerType::U16))) => {
+                        Ok(Some(BasicValueEnum::IntValue(
+                            self.context.i16_type().const_int(*num as u64, true),
+                        )))
+                    }
+                    (Integer(num), Some(Type::Int(IntegerType::I32))) => {
+                        Ok(Some(BasicValueEnum::IntValue(
+                            self.context.i32_type().const_int(*num as u64, false),
+                        )))
+                    }
+                    (Integer(num), Some(Type::Int(IntegerType::U32))) => {
+                        Ok(Some(BasicValueEnum::IntValue(
+                            self.context.i32_type().const_int(*num as u64, true),
+                        )))
+                    }
+                    (Integer(num), Some(Type::Int(IntegerType::I64))) => {
+                        Ok(Some(BasicValueEnum::IntValue(
+                            self.context.i64_type().const_int(*num as u64, false),
+                        )))
+                    }
+                    (Integer(num), Some(Type::Int(IntegerType::U64))) => {
+                        Ok(Some(BasicValueEnum::IntValue(
+                            self.context.i64_type().const_int(*num as u64, true),
+                        )))
+                    }
+                    (Integer(num), Some(Type::Int(IntegerType::I128 | IntegerType::U128))) => {
+                        let high_bits = (*num >> 64) as u64;
+                        let low_bits = *num as u64;
+                        Ok(Some(BasicValueEnum::IntValue(
+                            self.context
+                                .i128_type()
+                                .const_int_arbitrary_precision(&[high_bits, low_bits]),
+                        )))
+                    }
+
+                    (Float(num), Some(Type::Float(FloatType::F32))) => Ok(Some(
+                        BasicValueEnum::FloatValue(self.context.f32_type().const_float(*num)),
+                    )),
+                    (Float(num), Some(Type::Float(FloatType::F64))) => Ok(Some(
+                        BasicValueEnum::FloatValue(self.context.f64_type().const_float(*num)),
+                    )),
+
+                    (Bool(b), Some(Type::Bool)) => Ok(Some(BasicValueEnum::IntValue(
+                        self.context.bool_type().const_int(*b as u64, false),
+                    ))),
+
+                    a => todo!("Handle all cases, then throw an error: {:?}", a),
+                }
+            }
+            InnerExpression::If(if_expr) => {
                 let (condition, body, else_body) =
                     (&if_expr.condition, &if_expr.body, &if_expr.else_body);
                 let parent = self.fn_value();
@@ -416,7 +614,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     _ => Ok(None),
                 }
             }
-            Expression::While(while_) => {
+            InnerExpression::While(while_) => {
                 let parent = self.fn_value();
 
                 let cond_bb = self.context.append_basic_block(parent, "while.cond");
@@ -466,14 +664,45 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
 
                 Ok(None)
             }
-            Expression::Op(op) => {
+            InnerExpression::Op(op) => {
                 let (left, opcode, right) = (&op.lhs, &op.op, &op.rhs);
-                let lhs = self
+                let mut lhs = self
                     .compile_expr(left)?
                     .expect("Left side of binary operation must return a value.");
-                let rhs = self
+                let mut rhs = self
                     .compile_expr(right)?
                     .expect("Right side of binary operation must return a value.");
+
+                let return_type = expression
+                    .return_type
+                    .clone()
+                    .expect("Return type must be set.");
+
+                // // assert that both sides are of the same type as the output
+                // if left.return_type != right.return_type {
+                //     return Err(CompileError {
+                //         message: "Both sides of binary operation must be of the same type."
+                //             .to_string(),
+                //         span: left.span.clone(),
+                //     });
+                // }
+
+                // if right.return_type.clone().unwrap() != return_type {
+                //     return Err(CompileError {
+                //         message: "Return type must match the type of the operation.".to_string(),
+                //         span: expression.span.clone(),
+                //     });
+                // }
+
+                // cast lhs to the output type
+                if left.return_type.as_ref() != Some(&return_type) {
+                    lhs = self.cast_value_to_type(lhs, &return_type);
+                }
+
+                // cast rhs to the output type
+                if right.return_type.as_ref() != Some(&return_type) {
+                    rhs = self.cast_value_to_type(rhs, &return_type);
+                }
 
                 use crate::base_ast::Opcode::*;
                 match (lhs, rhs) {
@@ -530,19 +759,23 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                             ))),
                             Assign => {
                                 // handle assignment
-                                let sola_var = match *left.0.borrow() {
-                                    Expression::Variable(ref var_name) => var_name,
+                                let sola_var = match left.expression {
+                                    InnerExpression::Variable(ref var_name) => var_name,
                                     _ => return Err(CompileError {
                                         message:
                                             "Expected variable as left-hand operator of assignment."
                                                 .to_string(),
-                                        span: left.1.clone(),
+                                        span: left.span.clone(),
                                     }),
                                 };
+                                let sola_var =
+                                    self.resolver.all_variables.get(sola_var).expect(
+                                        "Variable should have been resolved by the resolver.",
+                                    );
 
                                 let var_val = self.compile_expr(right)?;
                                 let var =
-                                    self.variables.get(sola_var.name).ok_or(CompileError {
+                                    self.variables.get(&sola_var.name).ok_or(CompileError {
                                         message: format!("Undefined variable: {}", sola_var.name),
                                         span: sola_var.span.clone(),
                                     })?;
@@ -585,7 +818,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     _ => todo!(),
                 }
             }
-            Expression::UnaryOp(opcode, expr) => {
+            InnerExpression::UnaryOp(opcode, expr) => {
                 let expr = self
                     .compile_expr(&expr)?
                     .expect("Unary operation must return a value.");
@@ -604,8 +837,87 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     _ => todo!(),
                 }
             }
-            Expression::ExpressionComment(_) => todo!(),
-            Expression::Error => todo!(),
+        }
+    }
+
+    fn cast_value_to_type(
+        &mut self,
+        value: BasicValueEnum<'ctx>,
+        return_type: &Type,
+    ) -> BasicValueEnum<'ctx> {
+        // println!(
+        //     "Casting value from type {} to type: {:?}",
+        //     value.get_type(),
+        //     return_type
+        // );
+        match value {
+            BasicValueEnum::IntValue(lhs) => match &return_type {
+                Type::Int(IntegerType::I8) => inkwell::values::BasicValueEnum::IntValue(
+                    self.builder
+                        .build_int_cast_sign_flag(lhs, self.context.i8_type(), true, "tmp")
+                        .unwrap(),
+                ),
+                Type::Int(IntegerType::U8) => BasicValueEnum::IntValue(
+                    self.builder
+                        .build_int_cast_sign_flag(lhs, self.context.i8_type(), false, "tmp")
+                        .unwrap(),
+                ),
+                Type::Int(IntegerType::I16) => BasicValueEnum::IntValue(
+                    self.builder
+                        .build_int_cast_sign_flag(lhs, self.context.i16_type(), true, "tmp")
+                        .unwrap(),
+                ),
+                Type::Int(IntegerType::U16) => BasicValueEnum::IntValue(
+                    self.builder
+                        .build_int_cast_sign_flag(lhs, self.context.i16_type(), false, "tmp")
+                        .unwrap(),
+                ),
+                Type::Int(IntegerType::I32) => BasicValueEnum::IntValue(
+                    self.builder
+                        .build_int_cast_sign_flag(lhs, self.context.i32_type(), true, "tmp")
+                        .unwrap(),
+                ),
+                Type::Int(IntegerType::U32) => BasicValueEnum::IntValue(
+                    self.builder
+                        .build_int_cast_sign_flag(lhs, self.context.i32_type(), false, "tmp")
+                        .unwrap(),
+                ),
+                Type::Int(IntegerType::I64) => BasicValueEnum::IntValue(
+                    self.builder
+                        .build_int_cast_sign_flag(lhs, self.context.i64_type(), true, "tmp")
+                        .unwrap(),
+                ),
+                Type::Int(IntegerType::U64) => BasicValueEnum::IntValue(
+                    self.builder
+                        .build_int_cast_sign_flag(lhs, self.context.i64_type(), false, "tmp")
+                        .unwrap(),
+                ),
+                Type::Int(IntegerType::I128) => BasicValueEnum::IntValue(
+                    self.builder
+                        .build_int_cast_sign_flag(lhs, self.context.i128_type(), true, "tmp")
+                        .unwrap(),
+                ),
+                Type::Int(IntegerType::U128) => BasicValueEnum::IntValue(
+                    self.builder
+                        .build_int_cast_sign_flag(lhs, self.context.i128_type(), false, "tmp")
+                        .unwrap(),
+                ),
+                _ => todo!(),
+            },
+            BasicValueEnum::FloatValue(lhs) => match &return_type {
+                Type::Float(FloatType::F32) => BasicValueEnum::FloatValue(
+                    self.builder
+                        .build_float_cast(lhs, self.context.f32_type(), "tmp")
+                        .unwrap(),
+                ),
+                Type::Float(FloatType::F64) => BasicValueEnum::FloatValue(
+                    self.builder
+                        .build_float_cast(lhs, self.context.f64_type(), "tmp")
+                        .unwrap(),
+                ),
+                _ => todo!(),
+            },
+            _ => todo!(),
         }
     }
 }
