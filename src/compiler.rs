@@ -238,7 +238,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     .return_type
                     .as_ref()
                     .unwrap();
-                if body_type < return_type {
+                if body_type.can_convert_to(return_type) {
                     *body = self.cast_value_to_type(body.clone(), return_type);
                 } else if body_type == return_type {
                     // do nothing, because the types are already the same
@@ -422,14 +422,49 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                         let args = &function_call.args;
                         let mut compiled_args = Vec::with_capacity(args.len());
 
-                        for arg in args {
-                            compiled_args.push(self.compile_expr(arg)?);
+                        for (arg_expr, arg_type) in args.into_iter().zip(
+                            function
+                                .definition
+                                .params
+                                .iter()
+                                .map(|p| &self.resolver.all_variables[p].type_),
+                        ) {
+                            let value = self.compile_expr(arg_expr)?;
+                            let value = match value {
+                                Some(value) => value,
+                                None => {
+                                    return Err(CompileError {
+                                        message: "Error compiling function call. Argument expr doesn't return anything."
+                                            .to_string(),
+                                        span: expression.span.clone(),
+                                    });
+                                }
+                            };
+                            // convert, if types don't match
+                            if arg_type
+                                != arg_expr
+                                    .return_type
+                                    .as_ref()
+                                    .expect("Return type should be set, because we check earlier that compilation was returns type.")
+                            {
+                                if arg_expr.return_type.as_ref().unwrap().can_convert_to(arg_type) {
+                                    compiled_args.push(self.cast_value_to_type(value, arg_type));
+                                } else {
+                                    return Err(CompileError {
+                                        message: "Argument type doesn't match the function definition."
+                                            .to_string(),
+                                        span: expression.span.clone(),
+                                    });
+                                }
+                            } else {
+                                compiled_args.push(value);
+                            }
                         }
 
                         let argsv: Vec<BasicMetadataValueEnum> = compiled_args
                             .iter()
                             .by_ref()
-                            .map(|&val| val.expect("Function argument must not be none").into())
+                            .map(|&val| val.into())
                             .collect();
 
                         match self
@@ -460,8 +495,8 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 }
             }
             InnerExpression::Literal(lit) => {
-                use resolver::Literal::*;
-                match (lit, &expression.return_type) {
+                use resolver::InnerLiteral::*;
+                match (&lit.inner, &expression.return_type) {
                     // Integer(num) => Ok(Some(BasicValueEnum::IntValue(
                     //     self.context.i32_type().const_int(*num as u64, false),
                     // ))),
@@ -666,43 +701,12 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
             }
             InnerExpression::Op(op) => {
                 let (left, opcode, right) = (&op.lhs, &op.op, &op.rhs);
-                let mut lhs = self
+                let lhs = self
                     .compile_expr(left)?
                     .expect("Left side of binary operation must return a value.");
-                let mut rhs = self
+                let rhs = self
                     .compile_expr(right)?
                     .expect("Right side of binary operation must return a value.");
-
-                let return_type = expression
-                    .return_type
-                    .clone()
-                    .expect("Return type must be set.");
-
-                // // assert that both sides are of the same type as the output
-                // if left.return_type != right.return_type {
-                //     return Err(CompileError {
-                //         message: "Both sides of binary operation must be of the same type."
-                //             .to_string(),
-                //         span: left.span.clone(),
-                //     });
-                // }
-
-                // if right.return_type.clone().unwrap() != return_type {
-                //     return Err(CompileError {
-                //         message: "Return type must match the type of the operation.".to_string(),
-                //         span: expression.span.clone(),
-                //     });
-                // }
-
-                // cast lhs to the output type
-                if left.return_type.as_ref() != Some(&return_type) {
-                    lhs = self.cast_value_to_type(lhs, &return_type);
-                }
-
-                // cast rhs to the output type
-                if right.return_type.as_ref() != Some(&return_type) {
-                    rhs = self.cast_value_to_type(rhs, &return_type);
-                }
 
                 use crate::base_ast::Opcode::*;
                 match (lhs, rhs) {
@@ -780,6 +784,18 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                                         span: sola_var.span.clone(),
                                     })?;
 
+                                // check that the types match
+                                if sola_var.type_ != *right.return_type.as_ref().unwrap() {
+                                    return Err(CompileError {
+                                            message: format!(
+                                                "Cannot assign value of type {:?} to variable of type {:?}.",
+                                                right.return_type.as_ref().unwrap(),
+                                                sola_var.type_
+                                            ),
+                                            span: right.span.clone(),
+                                        });
+                                }
+
                                 self.builder
                                     .build_store(
                                         var.0,
@@ -837,6 +853,13 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     _ => todo!(),
                 }
             }
+            InnerExpression::Cast(return_type, expr) => {
+                let expr = self
+                    .compile_expr(&expr)?
+                    .expect("Cast expression must return a value to be cast.");
+
+                Ok(Some(self.cast_value_to_type(expr, return_type)))
+            }
         }
     }
 
@@ -845,11 +868,11 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
         value: BasicValueEnum<'ctx>,
         return_type: &Type,
     ) -> BasicValueEnum<'ctx> {
-        // println!(
-        //     "Casting value from type {} to type: {:?}",
-        //     value.get_type(),
-        //     return_type
-        // );
+        println!(
+            "Casting value from type {} to type: {:?}",
+            value.get_type(),
+            return_type
+        );
         match value {
             BasicValueEnum::IntValue(lhs) => match &return_type {
                 Type::Int(IntegerType::I8) => inkwell::values::BasicValueEnum::IntValue(
@@ -902,7 +925,12 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                         .build_int_cast_sign_flag(lhs, self.context.i128_type(), false, "tmp")
                         .unwrap(),
                 ),
-                _ => todo!(),
+                Type::Bool => BasicValueEnum::IntValue(
+                    self.builder
+                        .build_int_cast_sign_flag(lhs, self.context.bool_type(), false, "tmp")
+                        .unwrap(),
+                ),
+                type_ => todo!("{:?}", type_),
             },
             BasicValueEnum::FloatValue(lhs) => match &return_type {
                 Type::Float(FloatType::F32) => BasicValueEnum::FloatValue(

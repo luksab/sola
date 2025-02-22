@@ -1,6 +1,10 @@
 - [x] track spans
 - [ ] parser error recovery (brace matching)
 - [x] track types (i64, i32, u64, etc.)
+- [ ] make sure all type conversions are inserted in the resolver
+- [ ] add type casting to syntax
+- [ ] resolver errors
+- [ ] better error messages (multiple error types with multiple spans)
 - [ ] pointer types
 - [ ] array/struct/enums
 - [ ] match expressions

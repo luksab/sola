@@ -5,7 +5,10 @@ use std::{
     ops::Range,
 };
 
-use crate::{formatter::{Format, Formatter}, resolver::{FloatType, IntegerType}};
+use crate::{
+    formatter::{Format, Formatter},
+    resolver::{FloatType, IntegerType},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SolaParseError {
