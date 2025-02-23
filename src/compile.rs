@@ -27,9 +27,8 @@ fn run_passes_on(module: &Module, level: OptimizationLevel) {
         .unwrap();
 
     let passes: &[&str] = match level {
-        OptimizationLevel::None => &[
-            "instcount",
-        ],
+        // this needs to have anything in, so that llvm doesn't complain
+        OptimizationLevel::None => &["instcount"],
         OptimizationLevel::Less | OptimizationLevel::Default => &[
             "instcombine",
             "reassociate",
@@ -76,6 +75,9 @@ pub fn compile(
     if print_ir {
         module.print_to_stderr();
     }
+    module
+        .print_to_file(std::path::Path::new("output.ll"))
+        .unwrap();
 
     // compile to object file
     let target_triple = TargetMachine::get_default_triple();
@@ -111,9 +113,23 @@ pub fn compile(
         )
         .unwrap();
 
+    // compile stdlib.c to object file
+    let mut binding = std::process::Command::new("clang");
+    let binding_command = binding.arg("stdlib.c").arg("-c").arg("-o").arg("stdlib.o");
+    if let OptimizationLevel::Aggressive = level {
+        binding_command.arg("-O3");
+    }
+    binding_command
+        .status()
+        .expect("Failed to execute stdlib compile process");
+
     // link object file
     let mut binding = std::process::Command::new("clang");
-    let linker_command = binding.arg("output.o").arg("-o").arg("output");
+    let linker_command = binding
+        .arg("output.o")
+        .arg("stdlib.o")
+        .arg("-o")
+        .arg("output");
     if let OptimizationLevel::Aggressive = level {
         linker_command.arg("-O3");
     }
