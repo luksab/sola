@@ -207,53 +207,13 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 .insert(arg_name, (alloca, resolved_variable.type_.clone()));
         }
 
-        // // check that the return type of the body is the same as the function definition
-        // if &function.definition.return_type != &function.body.as_ref().unwrap().return_type {
-        //     return Err(CompileError {
-        //         message: format!(
-        //             "Return type of function body({:?}) does not match function definition({:?}).",
-        //             function.body.as_ref().unwrap().return_type,
-        //             function.definition.return_type
-        //         ),
-        //         span: function.span.clone(),
-        //     });
-        // }
-
         // compile body
-        let mut body = self.compile_expr(
+        let body = self.compile_expr(
             function
                 .body
                 .as_ref()
                 .expect("We should have returned earlier if this was None"),
         )?;
-
-        // if the body returns something and the function definition has a return type, cast the return value
-        if let Some(body) = &mut body {
-            if let Some(return_type) = &function.definition.return_type {
-                // check, that the type of the body can be casted to the return type
-                let body_type = function
-                    .body
-                    .as_ref()
-                    .unwrap()
-                    .return_type
-                    .as_ref()
-                    .unwrap();
-                if body_type.can_convert_to(return_type) {
-                    *body = self.cast_value_to_type(body.clone(), return_type);
-                } else if body_type == return_type {
-                    // do nothing, because the types are already the same
-                } else {
-                    return Err(CompileError {
-                        message: format!(
-                            "Return type of function body ({:?}) cannot be casted to function definition ({:?}).",
-                            body_type,
-                            return_type
-                        ),
-                        span: function.span.clone(),
-                    });
-                }
-            }
-        }
 
         self.builder
             .build_return(body.as_ref().map(|b| b as &dyn BasicValue))
@@ -419,47 +379,19 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                 let function = &self.resolver.all_functions[function_call.function];
                 match self.get_function(&function.definition.name) {
                     Some(fun) => {
-                        let args = &function_call.args;
-                        let mut compiled_args = Vec::with_capacity(args.len());
-
-                        for (arg_expr, arg_type) in args.into_iter().zip(
-                            function
-                                .definition
-                                .params
-                                .iter()
-                                .map(|p| &self.resolver.all_variables[p].type_),
-                        ) {
-                            let value = self.compile_expr(arg_expr)?;
-                            let value = match value {
-                                Some(value) => value,
-                                None => {
-                                    return Err(CompileError {
+                        let compiled_args: Vec<BasicValueEnum> = function_call
+                            .args
+                            .iter()
+                            .map(|arg_expr| {
+                                self.compile_expr(arg_expr).and_then(|value| {
+                                    value.ok_or_else(|| CompileError {
                                         message: "Error compiling function call. Argument expr doesn't return anything."
                                             .to_string(),
                                         span: expression.span.clone(),
-                                    });
-                                }
-                            };
-                            // convert, if types don't match
-                            if arg_type
-                                != arg_expr
-                                    .return_type
-                                    .as_ref()
-                                    .expect("Return type should be set, because we check earlier that compilation was returns type.")
-                            {
-                                if arg_expr.return_type.as_ref().unwrap().can_convert_to(arg_type) {
-                                    compiled_args.push(self.cast_value_to_type(value, arg_type));
-                                } else {
-                                    return Err(CompileError {
-                                        message: "Argument type doesn't match the function definition."
-                                            .to_string(),
-                                        span: expression.span.clone(),
-                                    });
-                                }
-                            } else {
-                                compiled_args.push(value);
-                            }
-                        }
+                                    })
+                                })
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
 
                         let argsv: Vec<BasicMetadataValueEnum> = compiled_args
                             .iter()

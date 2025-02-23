@@ -247,12 +247,54 @@ impl Function {
     fn resolve(resolver: &mut Resolver, function: &base_ast::Function<'_>) -> FunctionId {
         resolver.scope.push(vec![]);
         let definition = FunctionDefinition::resolve(resolver, &function.definition);
-        let body = function
+        let mut body = function
             .body
             .as_ref()
             .map(|body| Expression::resolve(resolver, (&body.0, body.1.clone())));
 
         resolver.scope.pop();
+
+        if body.is_some() {
+            let body_return_type = &body.as_ref().unwrap().return_type;
+            let definition_return_type = &definition.return_type;
+            match (body_return_type, definition_return_type) {
+                (None, Some(_)) => {
+                    panic!(
+                        "function {} should return something, but it doesn't",
+                        definition.name
+                    );
+                }
+                (Some(_), None) => {
+                    panic!(
+                        "function {} should not return anything, but it does",
+                        definition.name
+                    );
+                }
+                (Some(body_ret), Some(def_ret)) if body_ret != def_ret => {
+                    if body_ret.can_convert_to(def_ret) {
+                        // cast the return type
+                        body = Some(Expression {
+                            span: body.as_ref().unwrap().span.clone(),
+                            expression: InnerExpression::Cast(
+                                def_ret.clone(),
+                                Box::new(body.unwrap()),
+                            ),
+                            return_type: Some(def_ret.clone()),
+                        });
+                    } else {
+                        panic!(
+                            "function {} has a body with a return type of {} but the function's return type is {}",
+                            definition.name,
+                            body_ret,
+                            def_ret
+                        );
+                    }
+                }
+                _ => {
+                    // everything is fine. Either the function doesn't return anything or the return types match
+                }
+            }
+        }
 
         resolver.all_functions.push(Function {
             definition,
@@ -270,7 +312,6 @@ impl Function {
             print!("{}: {}", var.name, var.type_);
         }
         printer.indent -= 1;
-        printer.print_indent();
         print!(
             ") -> {}",
             self.definition
@@ -282,6 +323,7 @@ impl Function {
         if let Some(body) = &self.body {
             print!(" ");
             body.print(printer, resolver);
+            println!();
         } else {
             println!(";");
         }
@@ -395,7 +437,6 @@ impl Block {
     }
 
     fn print(&self, printer: &mut ResolverPrinter, resolver: &Resolver) {
-        printer.print_indent();
         println!("{{");
         printer.indent += 1;
         for statement in &self.statements {
@@ -404,10 +445,11 @@ impl Block {
         if let Some(return_value) = &self.return_value {
             printer.print_indent();
             return_value.print(printer, resolver);
+            println!("");
         }
         printer.indent -= 1;
         printer.print_indent();
-        println!("\n}}");
+        print!("}}");
     }
 }
 
@@ -447,8 +489,9 @@ impl Expression {
                 expr.print(printer, resolver);
             }
             InnerExpression::Cast(tipe, expr) => {
-                print!("cast to {}", tipe);
+                print!("(");
                 expr.print(printer, resolver);
+                print!(") as {}", tipe);
             }
         }
     }
@@ -578,7 +621,6 @@ impl While {
     }
 
     fn print(&self, printer: &mut ResolverPrinter, resolver: &Resolver) {
-        printer.print_indent();
         print!("while (");
         self.condition.print(printer, resolver);
         print!(") ");
@@ -598,7 +640,7 @@ impl FunctionCall {
         span: (&base_ast::FunctionCall<'_>, std::ops::Range<usize>),
     ) -> FunctionCall {
         let (call, span) = span;
-        let function = resolver
+        let function_id = resolver
             .all_functions
             .iter()
             .find(|(_, function)| function.definition.name == ustr(call.name))
@@ -606,19 +648,45 @@ impl FunctionCall {
             .unwrap_or_else(|| {
                 panic!("function {} not found", call.name);
             });
-        let args: Vec<_> = call
-            .args
-            .iter()
-            .map(|arg| Expression::resolve(resolver, (&arg.0, arg.1.clone())))
-            .collect();
+        let function_definition = &resolver.all_functions[function_id].definition;
+        let return_type = function_definition.return_type.clone();
 
-        let return_type = resolver.all_functions[function]
-            .definition
-            .return_type
-            .clone();
+        let mut args = Vec::new();
+
+        for (i, arg) in call.args.iter().enumerate() {
+            let mut arg = Expression::resolve(resolver, (&arg.0, arg.1.clone()));
+            let param = resolver.all_functions[function_id]
+                .definition
+                .params
+                .get(i)
+                .unwrap();
+            let param = &resolver.all_variables[param];
+            if arg.return_type != Some(param.type_.clone()) {
+                if arg
+                    .return_type
+                    .as_ref()
+                    .unwrap()
+                    .can_convert_to(&param.type_)
+                {
+                    arg = Expression {
+                        span: arg.span.clone(),
+                        expression: InnerExpression::Cast(param.type_.clone(), Box::new(arg)),
+                        return_type: Some(param.type_.clone()),
+                    };
+                } else {
+                    panic!(
+                        "argument {} should be of type {} but it is of type {}",
+                        i,
+                        param.type_,
+                        arg.return_type.as_ref().unwrap()
+                    );
+                }
+            }
+            args.push(arg);
+        }
 
         FunctionCall {
-            function,
+            function: function_id,
             args,
             return_type,
             span: span.clone(),
@@ -760,7 +828,6 @@ impl If {
     }
 
     fn print(&self, printer: &mut ResolverPrinter, resolver: &Resolver) {
-        printer.print_indent();
         print!("if (");
         self.condition.print(printer, resolver);
         print!(") ");
