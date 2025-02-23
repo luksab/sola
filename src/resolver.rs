@@ -100,11 +100,15 @@ impl IntegerType {
         match (self, other) {
             (I8, I16) | (I8, I32) | (I8, I64) | (I8, I128) => true,
             (U8, I16) | (U8, I32) | (U8, I64) | (U8, I128) => true,
+            (U8, U16) | (U8, U32) | (U8, U64) | (U8, U128) => true,
             (I16, I32) | (I16, I64) | (I16, I128) => true,
             (U16, I32) | (U16, I64) | (U16, I128) => true,
+            (U16, U32) | (U16, U64) | (U16, U128) => true,
             (I32, I64) | (I32, I128) => true,
             (U32, I64) | (U32, I128) => true,
+            (U32, U64) | (U32, U128) => true,
             (I64, I128) => true,
+            (U64, I128) => true,
             _ => false,
         }
     }
