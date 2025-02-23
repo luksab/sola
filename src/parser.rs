@@ -1,7 +1,7 @@
 use chumsky::prelude::*;
 use logos::Logos;
 
-use crate::base_ast::*;
+use crate::{base_ast::*, resolver::IntegerType};
 
 // The Chumsky parser will produce tokens first, then parse them into AST.
 #[derive(Logos, Debug, Clone, PartialEq, Eq, Hash)]
@@ -99,7 +99,7 @@ pub enum Token<'input> {
     // Identifiers, literals, comments
     #[regex("[a-zA-Z_][a-zA-Z0-9_]*")]
     Identifier(&'input str),
-    #[regex(r#"\d+"#)]
+    #[regex(r#"\d+(u8|u16|u32|u64|u128|i8|i16|i32|i64|i128)?"#)]
     Integer(&'input str),
     #[regex(r#""[^"]*""#)]
     StrLit(&'input str),
@@ -334,10 +334,30 @@ fn expression_parser<'input>(
                 choice((
                     filter_map(|span, token| match token {
                         Token::Integer(n) => {
-                            // TODO: Parse types in integer literals
+                            let (number, tipe) =
+                                n.split_at(n.find(|c: char| !c.is_digit(10)).unwrap_or(n.len()));
+                            let tipe = match tipe {
+                                "u8" => Some(IntegerType::U8),
+                                "i8" => Some(IntegerType::I8),
+                                "u16" => Some(IntegerType::U16),
+                                "i16" => Some(IntegerType::I16),
+                                "u32" => Some(IntegerType::U32),
+                                "i32" => Some(IntegerType::I32),
+                                "u64" => Some(IntegerType::U64),
+                                "i64" => Some(IntegerType::I64),
+                                "u128" => Some(IntegerType::U128),
+                                "i128" => Some(IntegerType::I128),
+                                "" => None,
+                                _ => {
+                                    return Err(Simple::custom(
+                                        span,
+                                        format!("Invalid integer type: {:?}", tipe),
+                                    ))
+                                }
+                            };
                             Ok(Expression::Literal(Literal::Integer(
-                                n.parse().unwrap(),
-                                None,
+                                number.parse().unwrap(),
+                                tipe,
                             )))
                         }
                         Token::BoolLiteral(b) => {
