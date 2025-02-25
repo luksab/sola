@@ -49,7 +49,34 @@ fn main() {
         println!("{:#?}", program);
     }
 
-    let program = resolver::resolve(&program);
+    let program = match resolver::resolve(&program) {
+        Ok(program) => program,
+        Err(err) => {
+            use ariadne::{ColorGenerator, Label, Report, ReportKind, Source};
+
+            let mut colors = ColorGenerator::new();
+
+            // Generate & choose some colours for each of our elements
+            let a = colors.next();
+            // let b = colors.next();
+            // let out = Color::Fixed(81);
+
+            let input_path = opt.input.to_str();
+            Report::build(ReportKind::Error, (input_path.unwrap(), err.span.clone()))
+                .with_label(
+                    Label::new((input_path.unwrap(), err.span))
+                        .with_message(err.message)
+                        .with_color(a),
+                )
+                .finish()
+                .print((input_path.unwrap(), Source::from(&input)))
+                .unwrap();
+
+            std::process::exit(1);
+        }
+    };
+
+    program.print();
 
     // print!("{}", formatter::format(&program));
 

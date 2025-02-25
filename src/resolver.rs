@@ -8,7 +8,14 @@ use crate::base_ast::Spanned;
 use crate::base_ast::{self, Span};
 use std::fmt::Display;
 
-pub fn resolve(program: &base_ast::Program) -> Program {
+pub struct ResolverError {
+    pub message: String,
+    pub span: Span,
+}
+
+type RResult<T> = std::result::Result<T, ResolverError>;
+
+pub fn resolve(program: &base_ast::Program) -> RResult<Program> {
     Program::resolve(program)
 }
 
@@ -185,22 +192,25 @@ impl Display for FloatType {
 }
 
 impl Type {
-    fn resolve(_resolver: &mut Resolver, tipe: &base_ast::Type<'_>) -> Type {
-        match tipe {
-            base_ast::Type::I8 => Type::Int(IntegerType::I8),
-            base_ast::Type::U8 => Type::Int(IntegerType::U8),
-            base_ast::Type::I16 => Type::Int(IntegerType::I16),
-            base_ast::Type::U16 => Type::Int(IntegerType::U16),
-            base_ast::Type::I32 => Type::Int(IntegerType::I32),
-            base_ast::Type::U32 => Type::Int(IntegerType::U32),
-            base_ast::Type::I64 => Type::Int(IntegerType::I64),
-            base_ast::Type::U64 => Type::Int(IntegerType::U64),
-            base_ast::Type::I128 => Type::Int(IntegerType::I128),
-            base_ast::Type::U128 => Type::Int(IntegerType::U128),
-            base_ast::Type::Bool => Type::Bool,
-            base_ast::Type::F32 => Type::Float(FloatType::F32),
-            base_ast::Type::F64 => Type::Float(FloatType::F64),
-            base_ast::Type::Custom(_) => unimplemented!(),
+    fn resolve(_resolver: &mut Resolver, tipe: Spanned<&base_ast::Type<'_>>) -> RResult<Type> {
+        match tipe.0 {
+            base_ast::Type::I8 => Ok(Type::Int(IntegerType::I8)),
+            base_ast::Type::U8 => Ok(Type::Int(IntegerType::U8)),
+            base_ast::Type::I16 => Ok(Type::Int(IntegerType::I16)),
+            base_ast::Type::U16 => Ok(Type::Int(IntegerType::U16)),
+            base_ast::Type::I32 => Ok(Type::Int(IntegerType::I32)),
+            base_ast::Type::U32 => Ok(Type::Int(IntegerType::U32)),
+            base_ast::Type::I64 => Ok(Type::Int(IntegerType::I64)),
+            base_ast::Type::U64 => Ok(Type::Int(IntegerType::U64)),
+            base_ast::Type::I128 => Ok(Type::Int(IntegerType::I128)),
+            base_ast::Type::U128 => Ok(Type::Int(IntegerType::U128)),
+            base_ast::Type::Bool => Ok(Type::Bool),
+            base_ast::Type::F32 => Ok(Type::Float(FloatType::F32)),
+            base_ast::Type::F64 => Ok(Type::Float(FloatType::F64)),
+            base_ast::Type::Custom(name) => Err(ResolverError {
+                message: format!("custom types are not supported yet: {}", name),
+                span: tipe.1.clone(),
+            }),
         }
     }
 }
@@ -210,7 +220,7 @@ pub struct Program {
     pub resolver: Resolver,
 }
 impl Program {
-    fn resolve(program: &base_ast::Program<'_>) -> Program {
+    fn resolve(program: &base_ast::Program<'_>) -> RResult<Program> {
         let mut resolver = Resolver::default();
 
         let mut things = Vec::new();
@@ -220,12 +230,12 @@ impl Program {
                     things.push(TopLevel::Function(Function::resolve(
                         &mut resolver,
                         function,
-                    )));
+                    )?));
                 }
                 base_ast::TopLevel::Comment(_) => {}
             }
         }
-        Program { things, resolver }
+        Ok(Program { things, resolver })
     }
 
     pub fn print(&self) {
@@ -248,13 +258,14 @@ pub struct Function {
     pub span: Span,
 }
 impl Function {
-    fn resolve(resolver: &mut Resolver, function: &base_ast::Function<'_>) -> FunctionId {
+    fn resolve(resolver: &mut Resolver, function: &base_ast::Function<'_>) -> RResult<FunctionId> {
         resolver.scope.push(vec![]);
-        let definition = FunctionDefinition::resolve(resolver, &function.definition);
+        let definition = FunctionDefinition::resolve(resolver, &function.definition)?;
         let mut body = function
             .body
             .as_ref()
-            .map(|body| Expression::resolve(resolver, (&body.0, body.1.clone())));
+            .map(|body| Expression::resolve(resolver, (&body.0, body.1.clone())))
+            .transpose()?;
 
         resolver.scope.pop();
 
@@ -263,16 +274,22 @@ impl Function {
             let definition_return_type = &definition.return_type;
             match (body_return_type, definition_return_type) {
                 (None, Some(_)) => {
-                    panic!(
-                        "function {} should return something, but it doesn't",
-                        definition.name
-                    );
+                    return Err(ResolverError {
+                        message: format!(
+                            "function {} should return something, but it doesn't",
+                            definition.name
+                        ),
+                        span: function.span.clone(),
+                    });
                 }
                 (Some(_), None) => {
-                    panic!(
-                        "function {} should not return anything, but it does",
-                        definition.name
-                    );
+                    return Err(ResolverError {
+                        message: format!(
+                            "function {} should not return anything, but it does",
+                            definition.name
+                        ),
+                        span: function.span.clone(),
+                    });
                 }
                 (Some(body_ret), Some(def_ret)) if body_ret != def_ret => {
                     if body_ret.can_convert_to(def_ret) {
@@ -286,12 +303,15 @@ impl Function {
                             return_type: Some(def_ret.clone()),
                         });
                     } else {
-                        panic!(
-                            "function {} has a body with a return type of {} but the function's return type is {}",
-                            definition.name,
-                            body_ret,
-                            def_ret
-                        );
+                        return Err(ResolverError {
+                            message: format!(
+                                "function {} has a body with a return type of {} but the function's return type is {}",
+                                definition.name,
+                                body_ret,
+                                def_ret
+                            ),
+                            span: function.span.clone(),
+                        });
                     }
                 }
                 _ => {
@@ -300,11 +320,11 @@ impl Function {
             }
         }
 
-        resolver.all_functions.push(Function {
+        Ok(resolver.all_functions.push(Function {
             definition,
             body,
             span: function.span.clone(),
-        })
+        }))
     }
 
     fn print(&self, printer: &mut ResolverPrinter, resolver: &Resolver) {
@@ -344,7 +364,7 @@ impl FunctionDefinition {
     fn resolve(
         resolver: &mut Resolver,
         definition: &(base_ast::FunctionDefinition<'_>, std::ops::Range<usize>),
-    ) -> Self {
+    ) -> RResult<Self> {
         let span = definition.1.clone();
         let definition = &definition.0;
         let name = ustr(definition.name);
@@ -352,17 +372,18 @@ impl FunctionDefinition {
             .params
             .iter()
             .map(|param| Variable::add_param(resolver, param))
-            .collect();
+            .collect::<RResult<_>>()?;
         let return_type = definition
             .return_type
-            .map(|tipe| Type::resolve(resolver, &tipe));
+            .map(|tipe| Type::resolve(resolver, (&tipe, span.clone())))
+            .transpose()?;
 
-        FunctionDefinition {
+        Ok(FunctionDefinition {
             name,
             params,
             return_type,
             span,
-        }
+        })
     }
 }
 
@@ -372,27 +393,30 @@ pub struct Variable {
     pub span: Span,
 }
 impl Variable {
-    fn add_param(resolver: &mut Resolver, variable: &base_ast::Parameter<'_>) -> VariableId {
+    fn add_param(
+        resolver: &mut Resolver,
+        variable: &base_ast::Parameter<'_>,
+    ) -> RResult<VariableId> {
         let span = variable.span.clone();
         let name = ustr(variable.name);
-        let type_ = Type::resolve(resolver, &variable.tipe);
+        let type_ = Type::resolve(resolver, (&variable.tipe, span.clone()))?;
         let var = Variable { name, type_, span };
         let slf = resolver.all_variables.push(var);
         resolver.scope.last_mut().unwrap().push(slf);
-        slf
+        Ok(slf)
     }
 
-    fn add_var(resolver: &mut Resolver, variable: &base_ast::Let<'_>) -> VariableId {
+    fn add_var(resolver: &mut Resolver, variable: &base_ast::Let<'_>) -> RResult<VariableId> {
         let span = variable.value.1.clone();
         let name = ustr(variable.name);
-        let type_ = Type::resolve(resolver, &variable.tipe);
+        let type_ = Type::resolve(resolver, (&variable.tipe, span.clone()))?;
         let var = Variable { name, type_, span };
         let slf = resolver.all_variables.push(var);
         resolver.scope.last_mut().unwrap().push(slf);
-        slf
+        Ok(slf)
     }
 
-    fn resolve_var(resolver: &mut Resolver, var: &base_ast::Variable<'_>) -> VariableId {
+    fn resolve_var(resolver: &mut Resolver, var: &base_ast::Variable<'_>) -> RResult<VariableId> {
         let name = ustr(var.name);
         // look for the variable in the scopes
         resolver
@@ -405,8 +429,9 @@ impl Variable {
                     .find(|id| resolver.all_variables[*id].name == name)
             })
             .copied()
-            .unwrap_or_else(|| {
-                panic!("variable {} not found in scope", name);
+            .ok_or_else(|| ResolverError {
+                message: format!("variable {} not found in scope", name),
+                span: var.span.clone(),
             })
     }
 }
@@ -417,27 +442,31 @@ pub struct Block {
     pub span: Span,
 }
 impl Block {
-    fn resolve(resolver: &mut Resolver, block: Spanned<&base_ast::Block<'_>>) -> Block {
+    fn resolve(resolver: &mut Resolver, block: Spanned<&base_ast::Block<'_>>) -> RResult<Block> {
         resolver.scope.push(vec![]);
 
         let (block, span) = block;
         let statements = block
             .statements
             .iter()
-            .flat_map(|statement| Statement::resolve(resolver, statement))
-            .collect();
-        let return_value = block
-            .return_value
-            .as_ref()
-            .map(|expr| Box::new(Expression::resolve(resolver, (&expr.0, expr.1.clone()))));
+            .flat_map(|statement| Statement::resolve(resolver, statement).transpose())
+            .collect::<RResult<_>>()?;
+        let return_value = if let Some(expr) = &block.return_value {
+            Some(Box::new(Expression::resolve(
+                resolver,
+                (&expr.0, expr.1.clone()),
+            )?))
+        } else {
+            None
+        };
 
         resolver.scope.pop();
 
-        Block {
+        Ok(Block {
             statements,
             return_value,
             span,
-        }
+        })
     }
 
     fn print(&self, printer: &mut ResolverPrinter, resolver: &Resolver) {
@@ -517,11 +546,11 @@ impl Expression {
     fn resolve(
         resolver: &mut Resolver,
         expression: Spanned<&base_ast::Expression<'_>>,
-    ) -> Expression {
+    ) -> RResult<Expression> {
         let span = expression.1.clone();
-        match &expression.0 {
+        Ok(match &expression.0 {
             base_ast::Expression::Block(block) => {
-                let block = Block::resolve(resolver, (block, span.clone()));
+                let block = Block::resolve(resolver, (block, span.clone()))?;
                 Expression {
                     return_type: block
                         .return_value
@@ -535,12 +564,12 @@ impl Expression {
                 expression: InnerExpression::While(While::resolve(
                     resolver,
                     (while_, span.clone()),
-                )),
+                )?),
                 return_type: None,
                 span,
             },
             base_ast::Expression::FunctionCall(call) => {
-                let call = FunctionCall::resolve(resolver, (call, span.clone()));
+                let call = FunctionCall::resolve(resolver, (call, span.clone()))?;
                 Expression {
                     return_type: call.return_type.as_ref().map(|tipe| tipe.clone()),
                     expression: InnerExpression::FunctionCall(call),
@@ -548,7 +577,7 @@ impl Expression {
                 }
             }
             base_ast::Expression::Variable(var) => {
-                let var = Variable::resolve_var(resolver, var);
+                let var = Variable::resolve_var(resolver, var)?;
                 Expression {
                     expression: InnerExpression::Variable(var),
                     return_type: Some(resolver.all_variables[var].type_.clone()),
@@ -556,7 +585,7 @@ impl Expression {
                 }
             }
             base_ast::Expression::Literal(lit) => {
-                let resolved_literal = Literal::resolve(lit);
+                let resolved_literal = Literal::resolve(lit)?;
                 Expression {
                     return_type: Some(resolved_literal.type_.clone()),
                     expression: InnerExpression::Literal(resolved_literal),
@@ -564,7 +593,7 @@ impl Expression {
                 }
             }
             base_ast::Expression::If(if_) => {
-                let if_ = If::resolve(resolver, (if_, span.clone()));
+                let if_ = If::resolve(resolver, (if_, span.clone()))?;
                 Expression {
                     return_type: if_
                         .else_body
@@ -575,7 +604,7 @@ impl Expression {
                 }
             }
             base_ast::Expression::Op(op) => {
-                let op = Op::resolve(resolver, (op, span.clone()));
+                let op = Op::resolve(resolver, (op, span.clone()))?;
                 Expression {
                     return_type: Some(op.return_type.clone()),
                     expression: InnerExpression::Op(op),
@@ -583,7 +612,7 @@ impl Expression {
                 }
             }
             base_ast::Expression::UnaryOp(op, expr) => {
-                let expr = Box::new(Expression::resolve(resolver, (&expr.0, expr.1.clone())));
+                let expr = Box::new(Expression::resolve(resolver, (&expr.0, expr.1.clone()))?);
                 Expression {
                     return_type: expr.return_type.clone(),
                     expression: InnerExpression::UnaryOp(*op, expr),
@@ -594,7 +623,7 @@ impl Expression {
             base_ast::Expression::Error | base_ast::Expression::ExpressionComment(_) => {
                 unimplemented!("I think I should handle this error in an earlier pass")
             }
-        }
+        })
     }
 }
 
@@ -604,24 +633,24 @@ pub struct While {
     pub span: Span,
 }
 impl While {
-    fn resolve(resolver: &mut Resolver, while_: Spanned<&base_ast::While<'_>>) -> While {
+    fn resolve(resolver: &mut Resolver, while_: Spanned<&base_ast::While<'_>>) -> RResult<While> {
         let (while_, span) = while_;
         let (condition_expr, condition_span) = &*while_.condition;
         let condition = Box::new(Expression::resolve(
             resolver,
             (condition_expr, condition_span.clone()),
-        ));
+        )?);
         let (body_expr, body_span) = &*while_.body;
         let body = Box::new(Expression::resolve(
             resolver,
             (&body_expr, body_span.clone()),
-        ));
+        )?);
 
-        While {
+        Ok(While {
             condition,
             body,
             span: span.clone(),
-        }
+        })
     }
 
     fn print(&self, printer: &mut ResolverPrinter, resolver: &Resolver) {
@@ -642,23 +671,24 @@ impl FunctionCall {
     fn resolve(
         resolver: &mut Resolver,
         span: (&base_ast::FunctionCall<'_>, std::ops::Range<usize>),
-    ) -> FunctionCall {
+    ) -> RResult<FunctionCall> {
         let (call, span) = span;
         let function_id = resolver
             .all_functions
             .iter()
             .find(|(_, function)| function.definition.name == ustr(call.name))
             .map(|(id, _)| id)
-            .unwrap_or_else(|| {
-                panic!("function {} not found", call.name);
-            });
+            .ok_or_else(|| ResolverError {
+                message: format!("function {} not found", call.name),
+                span: span.clone(),
+            })?;
         let function_definition = &resolver.all_functions[function_id].definition;
         let return_type = function_definition.return_type.clone();
 
         let mut args = Vec::new();
 
         for (i, arg) in call.args.iter().enumerate() {
-            let mut arg = Expression::resolve(resolver, (&arg.0, arg.1.clone()));
+            let mut arg = Expression::resolve(resolver, (&arg.0, arg.1.clone()))?;
             let param = resolver.all_functions[function_id]
                 .definition
                 .params
@@ -678,23 +708,26 @@ impl FunctionCall {
                         return_type: Some(param.type_.clone()),
                     };
                 } else {
-                    panic!(
-                        "argument {} should be of type {} but it is of type {}",
-                        i,
-                        param.type_,
-                        arg.return_type.as_ref().unwrap()
-                    );
+                    return Err(ResolverError {
+                        message: format!(
+                            "argument {} should be of type {} but it is of type {}",
+                            i,
+                            param.type_,
+                            arg.return_type.as_ref().unwrap()
+                        ),
+                        span: arg.span.clone(),
+                    });
                 }
             }
             args.push(arg);
         }
 
-        FunctionCall {
+        Ok(FunctionCall {
             function: function_id,
             args,
             return_type,
             span: span.clone(),
-        }
+        })
     }
 
     fn print(&self, printer: &mut ResolverPrinter, resolver: &Resolver) {
@@ -724,7 +757,7 @@ pub enum InnerLiteral {
     String(String),
 }
 impl Literal {
-    fn resolve(lit: &base_ast::Literal<'_>) -> Literal {
+    fn resolve(lit: &base_ast::Literal<'_>) -> RResult<Literal> {
         match lit {
             base_ast::Literal::Integer(integer, None) => {
                 let integer = *integer;
@@ -750,19 +783,19 @@ impl Literal {
                     Type::Int(IntegerType::U128)
                 };
 
-                Literal {
+                Ok(Literal {
                     inner: InnerLiteral::Integer(integer),
                     type_,
-                }
+                })
             }
-            base_ast::Literal::Integer(num, Some(type_)) => Literal {
+            base_ast::Literal::Integer(num, Some(type_)) => Ok(Literal {
                 inner: InnerLiteral::Integer(*num),
                 type_: Type::Int(type_.clone()),
-            },
-            base_ast::Literal::Bool(b) => Literal {
+            }),
+            base_ast::Literal::Bool(b) => Ok(Literal {
                 inner: InnerLiteral::Bool(*b),
                 type_: Type::Bool,
-            },
+            }),
             base_ast::Literal::Float(float, None) => {
                 let float = *float;
                 let type_ = if float >= f32::MIN as f64 && float <= f32::MAX as f64 {
@@ -771,15 +804,15 @@ impl Literal {
                     Type::Float(FloatType::F64)
                 };
 
-                Literal {
+                Ok(Literal {
                     inner: InnerLiteral::Float(float),
                     type_,
-                }
+                })
             }
-            base_ast::Literal::Float(num, Some(type_)) => Literal {
+            base_ast::Literal::Float(num, Some(type_)) => Ok(Literal {
                 inner: InnerLiteral::Float(*num),
                 type_: Type::Float(type_.clone()),
-            },
+            }),
             base_ast::Literal::String(_) => unimplemented!(),
         }
     }
@@ -803,32 +836,37 @@ pub struct If {
     pub span: Span,
 }
 impl If {
-    fn resolve(resolver: &mut Resolver, span: (&base_ast::If<'_>, std::ops::Range<usize>)) -> If {
+    fn resolve(
+        resolver: &mut Resolver,
+        span: (&base_ast::If<'_>, std::ops::Range<usize>),
+    ) -> RResult<If> {
         let (if_, span) = span;
         let (condition_expr, condition_span) = &*if_.condition;
         let condition = Box::new(Expression::resolve(
             resolver,
             (condition_expr, condition_span.clone()),
-        ));
+        )?);
         let (body_expr, body_span) = &*if_.body;
         let body = Box::new(Expression::resolve(
             resolver,
             (&body_expr, body_span.clone()),
-        ));
-        let else_body = if_.else_body.as_ref().map(|else_| {
-            let (else_expr, else_span) = &**else_;
-            Box::new(Expression::resolve(
-                resolver,
-                (&else_expr, else_span.clone()),
-            ))
-        });
+        )?);
+        let else_body = if_
+            .else_body
+            .as_ref()
+            .map(|else_| {
+                let (else_expr, else_span) = &**else_;
+                Expression::resolve(resolver, (&else_expr, else_span.clone()))
+            })
+            .transpose()?
+            .map(Box::new);
 
-        If {
+        Ok(If {
             condition,
             body,
             else_body,
             span: span.clone(),
-        }
+        })
     }
 
     fn print(&self, printer: &mut ResolverPrinter, resolver: &Resolver) {
@@ -851,12 +889,15 @@ pub struct Op {
     pub span: Span,
 }
 impl Op {
-    fn resolve(resolver: &mut Resolver, span: (&base_ast::Op<'_>, std::ops::Range<usize>)) -> Op {
+    fn resolve(
+        resolver: &mut Resolver,
+        span: (&base_ast::Op<'_>, std::ops::Range<usize>),
+    ) -> RResult<Op> {
         let (op, span) = span;
         let (lhs_expr, lhs_span) = &*op.lhs;
-        let mut lhs = Box::new(Expression::resolve(resolver, (lhs_expr, lhs_span.clone())));
+        let mut lhs = Box::new(Expression::resolve(resolver, (lhs_expr, lhs_span.clone()))?);
         let (rhs_expr, rhs_span) = &*op.rhs;
-        let mut rhs = Box::new(Expression::resolve(resolver, (rhs_expr, rhs_span.clone())));
+        let mut rhs = Box::new(Expression::resolve(resolver, (rhs_expr, rhs_span.clone()))?);
 
         let return_type = match op.op {
             base_ast::Opcode::Add
@@ -886,7 +927,13 @@ impl Op {
                     });
                     lhs_type
                 } else {
-                    unimplemented!("This should use a type inference system")
+                    return Err(ResolverError {
+                        message: format!(
+                            "Cant apply operator \"{}\" to types {:?} and {:?}",
+                            op.op, lhs.return_type, rhs.return_type
+                        ),
+                        span: span.clone(),
+                    });
                 }
             }
             base_ast::Opcode::Assign => {
@@ -903,21 +950,15 @@ impl Op {
                     });
                     lhs_type
                 } else {
-                    println!("lhs: {:?}, rhs: {:?}", lhs_type, rhs_type);
-                    unimplemented!("This should be a type error")
+                    return Err(ResolverError {
+                        message: format!(
+                            "Cant assign type {:?} to variable of type {:?}",
+                            rhs_type, lhs_type
+                        ),
+                        span: span.clone(),
+                    });
                 }
             }
-            // base_ast::Opcode::Mod => {
-            //     let lhs_type = lhs.return_type.clone().unwrap();
-            //     let rhs_type = rhs.return_type.clone().unwrap();
-            //     if matches!(lhs_type, Type::Int(_) | Type::Float(_))
-            //         && matches!(rhs_type, Type::Int(_))
-            //     {
-            //         lhs_type
-            //     } else {
-            //         unimplemented!("This should be a type error")
-            //     }
-            // }
             base_ast::Opcode::Eq
             | base_ast::Opcode::Ne
             | base_ast::Opcode::Lt
@@ -946,18 +987,24 @@ impl Op {
                     });
                     Type::Bool
                 } else {
-                    unimplemented!("This should use a type inference system")
+                    return Err(ResolverError {
+                        message: format!(
+                            "Cant compare types {:?} and {:?}",
+                            lhs.return_type, rhs.return_type
+                        ),
+                        span: span.clone(),
+                    });
                 }
             }
         };
 
-        Op {
+        Ok(Op {
             lhs,
             op: op.op,
             rhs,
             span: span.clone(),
             return_type,
-        }
+        })
     }
 
     fn print(&self, printer: &mut ResolverPrinter, resolver: &Resolver) {
@@ -974,19 +1021,26 @@ pub enum Statement {
 }
 
 impl Statement {
-    fn resolve(resolver: &mut Resolver, statement: &base_ast::Statement<'_>) -> Option<Statement> {
+    fn resolve(
+        resolver: &mut Resolver,
+        statement: &base_ast::Statement<'_>,
+    ) -> RResult<Option<Statement>> {
         match statement {
-            base_ast::Statement::Let(let_) => Some(Statement::Let(Let::resolve(resolver, let_))),
-            base_ast::Statement::Expression(expr) => Some(Statement::Expression(
-                Expression::resolve(resolver, (&expr.0, expr.1.clone())),
-            )),
+            base_ast::Statement::Let(let_) => {
+                Ok(Some(Statement::Let(Let::resolve(resolver, let_)?)))
+            }
+            base_ast::Statement::Expression(expr) => Ok(Some(Statement::Expression(
+                Expression::resolve(resolver, (&expr.0, expr.1.clone()))?,
+            ))),
             base_ast::Statement::Return(expr) => {
                 let expr = expr
                     .as_ref()
-                    .map(|expr| Box::new(Expression::resolve(resolver, (&expr.0, expr.1.clone()))));
-                Some(Statement::Return(expr))
+                    .map(|expr| Expression::resolve(resolver, (&expr.0, expr.1.clone())))
+                    .transpose()?;
+                let expr = expr.map(Box::new);
+                Ok(Some(Statement::Return(expr)))
             }
-            base_ast::Statement::Comment(_) => None,
+            base_ast::Statement::Comment(_) => Ok(None),
             base_ast::Statement::Error => {
                 unimplemented!("I think I should handle this error in an earlier pass")
             }
@@ -1022,18 +1076,19 @@ pub struct Let {
 }
 
 impl Let {
-    fn resolve(resolver: &mut Resolver, let_: &base_ast::Let<'_>) -> Let {
+    fn resolve(resolver: &mut Resolver, let_: &base_ast::Let<'_>) -> RResult<Let> {
         let name = ustr(let_.name);
         let mut value = Box::new(Expression::resolve(
             resolver,
             (&let_.value.0, let_.value.1.clone()),
-        ));
-        let type_ = Type::resolve(resolver, &let_.tipe);
+        )?);
+        let type_ = Type::resolve(resolver, (&let_.tipe, let_.value.1.clone()))?;
 
         if value.return_type.is_none() {
-            unimplemented!(
-                "This should use a type inference system. You can't assign nothing to a variable"
-            )
+            return Err(ResolverError {
+                message: "you can't assign nothing to a variable".to_string(),
+                span: let_.value.1.clone(),
+            });
         } else if value.return_type.as_ref().unwrap().can_convert_to(&type_) {
             // cast value to type_
             value = Box::new(Expression {
@@ -1042,17 +1097,25 @@ impl Let {
                 span: let_.value.1.clone(),
             });
         } else if !type_.can_convert_to(value.return_type.as_ref().unwrap()) {
-            unimplemented!("This should be a type error")
+            return Err(ResolverError {
+                message: format!(
+                    "variable {} should be of type {} but it is of type {}",
+                    name,
+                    type_,
+                    value.return_type.as_ref().unwrap()
+                ),
+                span: let_.value.1.clone(),
+            });
         }
 
-        let id = Variable::add_var(resolver, let_);
+        let id = Variable::add_var(resolver, let_)?;
 
-        Let {
+        Ok(Let {
             name,
             id,
             value,
             type_,
-        }
+        })
     }
 
     fn print(&self, printer: &mut ResolverPrinter, resolver: &Resolver) {
