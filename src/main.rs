@@ -62,15 +62,18 @@ fn main() {
             // let out = Color::Fixed(81);
 
             let input_path = opt.input.to_str();
-            Report::build(ReportKind::Error, (input_path.unwrap(), err.span.clone()))
-                .with_label(
-                    Label::new((input_path.unwrap(), err.span))
-                        .with_message(err.message)
-                        .with_color(a),
-                )
-                .finish()
-                .print((input_path.unwrap(), Source::from(&input)))
-                .unwrap();
+            Report::build(
+                ReportKind::Custom("Resolver Error", ariadne::Color::Red),
+                (input_path.unwrap(), err.span.clone()),
+            )
+            .with_label(
+                Label::new((input_path.unwrap(), err.span))
+                    .with_message(err.message)
+                    .with_color(a),
+            )
+            .finish()
+            .print((input_path.unwrap(), Source::from(&input)))
+            .unwrap();
 
             std::process::exit(1);
         }
@@ -99,15 +102,18 @@ fn main() {
         // let out = Color::Fixed(81);
 
         let input_path = opt.input.to_str();
-        Report::build(ReportKind::Error, (input_path.unwrap(), err.span.clone()))
-            .with_label(
-                Label::new((input_path.unwrap(), err.span))
-                    .with_message(err.message)
-                    .with_color(a),
-            )
-            .finish()
-            .print((input_path.unwrap(), Source::from(&input)))
-            .unwrap();
+        Report::build(
+            ReportKind::Custom("Compile Error", ariadne::Color::Red),
+            (input_path.unwrap(), err.span.clone()),
+        )
+        .with_label(
+            Label::new((input_path.unwrap(), err.span))
+                .with_message(err.message)
+                .with_color(a),
+        )
+        .finish()
+        .print((input_path.unwrap(), Source::from(&input)))
+        .unwrap();
 
         std::process::exit(1);
     }
@@ -124,24 +130,22 @@ fn report_parse_errors(
     for err in err {
         let input_path = opt.input.to_str();
         match err.reason() {
-            chumsky::error::SimpleReason::Unexpected => {
-                Report::build(ReportKind::Error, (input_path.unwrap(), err.span()))
-                    .with_label(
-                        Label::new((input_path.unwrap(), err.span()))
-                            .with_message(format!(
-                                "Unexpected token: \"{:?}\"",
-                                err.found().unwrap()
-                            ))
-                            .with_color(a),
-                    )
-                    .with_message(format!(
-                        "Expected one of: {:?}",
-                        err.expected().collect::<Vec<_>>()
-                    ))
-                    .finish()
-                    .print((input_path.unwrap(), Source::from(input)))
-                    .unwrap()
-            }
+            chumsky::error::SimpleReason::Unexpected => Report::build(
+                ReportKind::Custom("Parse Error", ariadne::Color::Red),
+                (input_path.unwrap(), err.span()),
+            )
+            .with_label(
+                Label::new((input_path.unwrap(), err.span()))
+                    .with_message(format!("Unexpected token: \"{:?}\"", err.found().unwrap()))
+                    .with_color(a),
+            )
+            .with_message(format!(
+                "Expected one of: {:?}",
+                err.expected().collect::<Vec<_>>()
+            ))
+            .finish()
+            .print((input_path.unwrap(), Source::from(input)))
+            .unwrap(),
             chumsky::error::SimpleReason::Unclosed {
                 span: _,
                 delimiter: _,
