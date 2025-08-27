@@ -3,6 +3,7 @@
 - [x] track types (i64, i32, u64, etc.)
 - [x] make sure all type conversions are inserted in the resolver
 - [x] add integer types (43u8)
+- [x] add compiler-span to errors (using file! and line! macros)
 - [ ] add type casting to syntax (43 as u8)
 - [x] resolver errors
 - [ ] better error messages (multiple error types with multiple spans)

@@ -6,11 +6,13 @@ use ustr::Ustr;
 
 use crate::base_ast::Spanned;
 use crate::base_ast::{self, Span};
+use crate::helpers::CompilerLocation;
 use std::fmt::Display;
 
 pub struct ResolverError {
     pub message: String,
     pub span: Span,
+    pub compiler_location: CompilerLocation,
 }
 
 type RResult<T> = std::result::Result<T, ResolverError>;
@@ -210,6 +212,7 @@ impl Type {
             base_ast::Type::Custom(name) => Err(ResolverError {
                 message: format!("custom types are not supported yet: {}", name),
                 span: tipe.1.clone(),
+                compiler_location: compiler_location!(),
             }),
         }
     }
@@ -280,6 +283,7 @@ impl Function {
                             definition.name
                         ),
                         span: function.span.clone(),
+                        compiler_location: compiler_location!(),
                     });
                 }
                 (Some(_), None) => {
@@ -289,6 +293,7 @@ impl Function {
                             definition.name
                         ),
                         span: function.span.clone(),
+                        compiler_location: compiler_location!(),
                     });
                 }
                 (Some(body_ret), Some(def_ret)) if body_ret != def_ret => {
@@ -311,6 +316,7 @@ impl Function {
                                 def_ret
                             ),
                             span: function.span.clone(),
+                            compiler_location: compiler_location!()
                         });
                     }
                 }
@@ -432,6 +438,7 @@ impl Variable {
             .ok_or_else(|| ResolverError {
                 message: format!("variable {} not found in scope", name),
                 span: var.span.clone(),
+                compiler_location: compiler_location!(),
             })
     }
 }
@@ -681,6 +688,7 @@ impl FunctionCall {
             .ok_or_else(|| ResolverError {
                 message: format!("function {} not found", call.name),
                 span: span.clone(),
+                compiler_location: compiler_location!(),
             })?;
         let function_definition = &resolver.all_functions[function_id].definition;
         let return_type = function_definition.return_type.clone();
@@ -716,6 +724,7 @@ impl FunctionCall {
                             arg.return_type.as_ref().unwrap()
                         ),
                         span: arg.span.clone(),
+                        compiler_location: compiler_location!(),
                     });
                 }
             }
@@ -933,6 +942,7 @@ impl Op {
                             op.op, lhs.return_type, rhs.return_type
                         ),
                         span: span.clone(),
+                        compiler_location: compiler_location!(),
                     });
                 }
             }
@@ -956,6 +966,7 @@ impl Op {
                             rhs_type, lhs_type
                         ),
                         span: span.clone(),
+                        compiler_location: compiler_location!(),
                     });
                 }
             }
@@ -993,6 +1004,7 @@ impl Op {
                             lhs.return_type, rhs.return_type
                         ),
                         span: span.clone(),
+                        compiler_location: compiler_location!(),
                     });
                 }
             }
@@ -1088,6 +1100,7 @@ impl Let {
             return Err(ResolverError {
                 message: "you can't assign nothing to a variable".to_string(),
                 span: let_.value.1.clone(),
+                compiler_location: compiler_location!(),
             });
         } else if value.return_type.as_ref().unwrap().can_convert_to(&type_) {
             // cast value to type_
@@ -1105,6 +1118,7 @@ impl Let {
                     value.return_type.as_ref().unwrap()
                 ),
                 span: let_.value.1.clone(),
+                compiler_location: compiler_location!(),
             });
         }
 

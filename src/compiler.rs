@@ -9,15 +9,19 @@ use inkwell::{
 };
 use ustr::Ustr;
 
-use crate::resolver::{
-    self, Expression, FloatType, Function, FunctionDefinition, InnerExpression, Program, Resolver,
-    Statement, TopLevel, Type,
-};
 use crate::{base_ast::Span, resolver::IntegerType};
+use crate::{
+    helpers::CompilerLocation,
+    resolver::{
+        self, Expression, FloatType, Function, FunctionDefinition, InnerExpression, Program,
+        Resolver, Statement, TopLevel, Type,
+    },
+};
 
 pub struct CompileError {
     pub message: String,
     pub span: Span,
+    pub compiler_location: CompilerLocation,
 }
 
 pub struct Compiler<'a, 'ctx> {
@@ -232,6 +236,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
             Err(CompileError {
                 message: "Invalid generated function.".to_string(),
                 span: function.span.clone(), // Replace with the appropriate span
+                compiler_location: compiler_location!(),
             })
         }
     }
@@ -267,6 +272,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     _ => Err(CompileError {
                         message: "Unsupported argument type.".to_string(),
                         span: resolved_variable.span.clone(),
+                        compiler_location: compiler_location!(),
                     }),
                 }
             })
@@ -345,6 +351,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                                     message: "Error compiling let statement. Expression is None."
                                         .to_string(),
                                     span: expression.span.clone(),
+                                    compiler_location: compiler_location!(),
                                 });
                             }
                         }
@@ -388,6 +395,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                                         message: "Error compiling function call. Argument expr doesn't return anything."
                                             .to_string(),
                                         span: expression.span.clone(),
+                                        compiler_location: compiler_location!(),
                                     })
                                 })
                             })
@@ -413,6 +421,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     None => Err(CompileError {
                         message: "Unknown function.".to_string(),
                         span: expression.span.clone(),
+                        compiler_location: compiler_location!(),
                     }),
                 }
             }
@@ -423,6 +432,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                     None => Err(CompileError {
                         message: format!("Undefined variable: {}", variable.name),
                         span: expression.span.clone(),
+                        compiler_location: compiler_location!(),
                     }),
                 }
             }
@@ -702,6 +712,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                                             "Expected variable as left-hand operator of assignment."
                                                 .to_string(),
                                         span: left.span.clone(),
+                                        compiler_location: compiler_location!(),
                                     }),
                                 };
                                 let sola_var =
@@ -714,6 +725,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                                     self.variables.get(&sola_var.name).ok_or(CompileError {
                                         message: format!("Undefined variable: {}", sola_var.name),
                                         span: sola_var.span.clone(),
+                                        compiler_location: compiler_location!(),
                                     })?;
 
                                 // check that the types match
@@ -725,6 +737,7 @@ impl<'a, 'ctx> Compiler<'a, 'ctx> {
                                                 sola_var.type_
                                             ),
                                             span: right.span.clone(),
+                                            compiler_location: compiler_location!(),
                                         });
                                 }
 

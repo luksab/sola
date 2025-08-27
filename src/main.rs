@@ -1,3 +1,6 @@
+#[macro_use]
+pub mod helpers;
+
 pub mod base_ast;
 pub mod compile;
 pub mod compiler;
@@ -66,6 +69,10 @@ fn main() {
                 ReportKind::Custom("Resolver Error", ariadne::Color::Red),
                 (input_path.unwrap(), err.span.clone()),
             )
+            .with_note(format!(
+                "This error occurred in the compiler at: {}",
+                err.compiler_location
+            ))
             .with_label(
                 Label::new((input_path.unwrap(), err.span))
                     .with_message(err.message)
@@ -106,6 +113,10 @@ fn main() {
             ReportKind::Custom("Compile Error", ariadne::Color::Red),
             (input_path.unwrap(), err.span.clone()),
         )
+        .with_note(format!(
+            "This error occurred in the compiler at: {}",
+            err.compiler_location
+        ))
         .with_label(
             Label::new((input_path.unwrap(), err.span))
                 .with_message(err.message)
